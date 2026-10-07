@@ -4,6 +4,9 @@
 #include "conversion.h"
 #include "platform.h"
 #include "ui_test.h"
+#include "unixupdate.h"
+#include <QFileOpenEvent>
+#include <functional>
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFileInfo>
@@ -71,7 +74,7 @@ class IconProvider : public QQuickImageProvider
     QImage requestImage(const QString &id, QSize *size, const QSize &requested) override
     {
         QString name = id.section('/', 0, 0), color = id.section('/', 1, 1);
-        QString svg = QCoreApplication::applicationDirPath() + "/assets/" + name + ".svg";
+        QString svg = Platform::assetPath(name + ".svg");
         QImage image;
         if (QFileInfo::exists(svg))
         {
@@ -83,7 +86,7 @@ class IconProvider : public QQuickImageProvider
             renderer.render(&painter);
         }
         else
-            image.load(QCoreApplication::applicationDirPath() + "/assets/" + name + ".png");
+            image.load(Platform::assetPath(name + ".png"));
         if (image.isNull())
             return {};
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
@@ -100,9 +103,37 @@ class IconProvider : public QQuickImageProvider
         return image;
     }
 };
+class Application : public QApplication
+{
+  public:
+    using QApplication::QApplication;
+    QStringList opened;
+    std::function<void(const QStringList &)> filesOpened;
+    bool event(QEvent *event) override
+    {
+        if (event->type() == QEvent::FileOpen)
+        {
+            const auto path = static_cast<QFileOpenEvent *>(event)->file();
+            if (filesOpened)
+                filesOpened({path});
+            else
+                opened << path;
+            return true;
+        }
+        return QApplication::event(event);
+    }
+};
 int main(int argc, char **argv)
 {
-    QApplication application(argc, argv);
+#ifndef Q_OS_WIN
+    if (argc > 1 && QByteArray(argv[1]) == "--apply-update")
+    {
+        QCoreApplication application(argc, argv);
+        application.setApplicationName("Athanor");
+        return UnixUpdate::apply(application.arguments());
+    }
+#endif
+    Application application(argc, argv);
     application.setApplicationName("Athanor");
     application.setApplicationVersion("1.1-alpha");
     application.setQuitOnLastWindowClosed(true);
@@ -139,6 +170,9 @@ int main(int argc, char **argv)
     parser.addOption(QCommandLineOption("delete-originals", "Delete originals after validated conversion", "", ""));
     parser.addOption(QCommandLineOption("include-subfolders", "Include subfolders", "", ""));
     parser.addPositionalArgument("files", "Input files", "[files...]");
+    QCommandLineOption platformTest("platform-test");
+    platformTest.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(platformTest);
     QCommandLineOption testOption("self-test", QString(), "folder");
     testOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(testOption);
@@ -155,6 +189,11 @@ int main(int argc, char **argv)
     updateTest.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(updateTest);
     parser.process(application);
+    if (parser.isSet("platform-test"))
+    {
+        extern int runPlatformTest();
+        return runPlatformTest();
+    }
     if (parser.isSet("cli"))
     {
         Options opts;
@@ -232,7 +271,8 @@ int main(int argc, char **argv)
     bool quick = parser.isSet("quick") || parser.value("target") != "auto";
     Controller controller(quick);
     controller.setTarget(parser.value("target"));
-    controller.addPaths(parser.positionalArguments(), parser.isSet("include-subfolders"));
+    controller.addPaths(parser.positionalArguments() + application.opened, parser.isSet("include-subfolders"));
+    application.filesOpened = [&controller](const QStringList &paths) { controller.addPaths(paths); };
     if (parser.isSet("update-test"))
     {
         qputenv("ATHANOR_TEST", "1");
@@ -278,14 +318,8 @@ int main(int argc, char **argv)
     engine.addImageProvider("icons", new IconProvider);
     engine.rootContext()->setContextProperty("backend", &controller);
     engine.rootContext()->setContextProperty("updater", &updater);
-    engine.rootContext()->setContextProperty("nativePlatform", QString(
-#ifdef Q_OS_WIN
-                                                                   "Windows"
-#else
-                                                                   "Linux"
-#endif
-                                                                   ));
-    application.setWindowIcon(QIcon(QCoreApplication::applicationDirPath() + "/assets/athanor.ico"));
+    engine.rootContext()->setContextProperty("nativePlatform", Platform::name());
+    application.setWindowIcon(QIcon(Platform::assetPath("athanor.ico")));
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &application, [] { QCoreApplication::exit(2); },
         Qt::QueuedConnection);

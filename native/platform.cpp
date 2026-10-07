@@ -1,5 +1,6 @@
 #include "platform.h"
 #include "conversion.h"
+#include "desktopintegration.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -13,6 +14,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #else
+#include <cstdio>
 #include <signal.h>
 #include <unistd.h>
 #ifdef Q_OS_LINUX
@@ -20,6 +22,9 @@
 #include <linux/fs.h>
 #include <sys/syscall.h>
 #endif
+#endif
+#ifdef Q_OS_MACOS
+bool athanorMacAnimationsEnabled();
 #endif
 void Platform::setupProcess(ChildProcess *process, bool workerGroup)
 {
@@ -33,6 +38,8 @@ bool Platform::publish(const QString &from, const QString &to)
 {
 #ifdef Q_OS_WIN
     return MoveFileExW(reinterpret_cast<LPCWSTR>(from.utf16()), reinterpret_cast<LPCWSTR>(to.utf16()), 0) != 0;
+#elif defined(Q_OS_MACOS)
+    return renamex_np(QFile::encodeName(from).constData(), QFile::encodeName(to).constData(), RENAME_EXCL) == 0;
 #elif defined(Q_OS_LINUX)
     return syscall(SYS_renameat2, AT_FDCWD, QFile::encodeName(from).constData(), AT_FDCWD,
                    QFile::encodeName(to).constData(), RENAME_NOREPLACE) == 0;
@@ -113,11 +120,7 @@ bool Platform::contextMenu(bool enabled, const QString &executable, QString *err
         *error = "Windows could not save the context menu settings";
     return ok;
 #else
-    Q_UNUSED(enabled);
-    Q_UNUSED(executable);
-    if (error)
-        *error = "File manager integration is configured by the Linux package";
-    return true;
+    return DesktopIntegration::configure(enabled, executable, error);
 #endif
 }
 void Platform::notify(const QString &title, const QString &message)
@@ -125,7 +128,7 @@ void Platform::notify(const QString &title, const QString &message)
     static QSystemTrayIcon *tray = nullptr;
     if (!tray)
     {
-        tray = new QSystemTrayIcon(QIcon(QCoreApplication::applicationDirPath() + "/assets/athanor.ico"), qApp);
+        tray = new QSystemTrayIcon(QIcon(Platform::assetPath("athanor.ico")), qApp);
         tray->setToolTip("Athanor");
         tray->show();
     }
@@ -150,6 +153,8 @@ bool Platform::animationsEnabled()
     BOOL enabled = TRUE;
     SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &enabled, 0);
     return enabled;
+#elif defined(Q_OS_MACOS)
+    return ::athanorMacAnimationsEnabled();
 #else
     QSettings desktop("org.gnome.desktop.interface", QSettings::NativeFormat);
     return desktop.value("enable-animations", true).toBool();

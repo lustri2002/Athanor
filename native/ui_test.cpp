@@ -15,6 +15,15 @@
 #include <QJSValue>
 #include <QTimer>
 #include <memory>
+#include "platform.h"
+static QString fixtureRoot()
+{
+    return qEnvironmentVariable("ATHANOR_TEST_FIXTURES", QCoreApplication::applicationDirPath() + "/../CompressionTest");
+}
+static QString testOutput(const QString &name)
+{
+    return QDir(qEnvironmentVariable("ATHANOR_TEST_OUTPUT_DIR", Platform::settingsDirectory() + "/tests")).filePath(name);
+}
 static QQuickItem *findVisualItem(QQuickItem *root, const QString &name)
 {
     if (root->objectName() == name)
@@ -83,7 +92,7 @@ void runUiTest(QQmlApplicationEngine *engine, Controller *controller, const QStr
     for (int i = 0; i < (compact ? 1 : 413); i++)
     {
         QueueItem row;
-        row.source = QCoreApplication::applicationDirPath() + "/../CompressionTest/Apple_first_logo.png";
+        row.source = fixtureRoot() + "/Apple_first_logo.png";
         row.before = QFileInfo(row.source).size();
         if (i % 2)
         {
@@ -372,7 +381,7 @@ void runUiTest(QQmlApplicationEngine *engine, Controller *controller, const QStr
                 for (int i = 0; i < 3; i++)
                 {
                     QueueItem row;
-                    row.source = QCoreApplication::applicationDirPath() + "/../CompressionTest/Apple_first_logo.png";
+                    row.source = fixtureRoot() + "/Apple_first_logo.png";
                     row.before = QFileInfo(row.source).size();
                     row.category = "image";
                     row.status = i == 2 ? "Error" : "Done";
@@ -433,7 +442,7 @@ void runUiTest(QQmlApplicationEngine *engine, Controller *controller, const QStr
                 QCoreApplication::sendEvent(window, &escape);
                 if (window->property("page").toInt() != 0)
                     *error += "Escape navigation failed\n";
-                controller->setOption("output", QCoreApplication::applicationDirPath() + "/Athanor.exe");
+                controller->setOption("output", QCoreApplication::applicationFilePath());
                 if (controller->outputError().isEmpty())
                     *error += "File path accepted as output folder\n";
                 controller->setOption("output", QString());
@@ -447,8 +456,7 @@ void runUiTest(QQmlApplicationEngine *engine, Controller *controller, const QStr
                     auto preview = window->findChild<QObject *>("previewDialog");
                     if (preview)
                     {
-                        QString fixture = QUrl::fromLocalFile(QCoreApplication::applicationDirPath() +
-                                                              "/../CompressionTest/Apple_first_logo.png")
+                        QString fixture = QUrl::fromLocalFile(fixtureRoot() + "/Apple_first_logo.png")
                                               .toString();
                         preview->setProperty("sources", QVariantList{fixture, fixture});
                     }
@@ -582,7 +590,7 @@ void runControllerTest(Controller *controller, const QString &folder)
         Conversion::writeLine({{"ok", errors->isEmpty()}, {"error", *errors}});
         QCoreApplication::exit(errors->isEmpty() ? 0 : 1);
     };
-    controller->setOption("output", QCoreApplication::applicationDirPath() + "/../../build-tools/feature-controller");
+    controller->setOption("output", testOutput("feature-controller"));
     controller->setOption("image", "avif");
     controller->setOption("threads", 2);
     controller->setOption("speed", "Fast");
@@ -622,7 +630,7 @@ void runControllerTest(Controller *controller, const QString &folder)
             if (!cancelled || failed)
                 *errors += "Cancellation counts incorrect; ";
             QTimer::singleShot(300, controller, [=] {
-                QDir out(QCoreApplication::applicationDirPath() + "/../../build-tools/feature-controller");
+                QDir out(testOutput("feature-controller"));
                 if (!out.entryList({".athanor-job-*"}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty())
                     *errors += "Cancelled staging was not removed; ";
                 end();
@@ -668,7 +676,7 @@ void runQueueReuseTest(Controller *controller, const QString &fixtures)
         Conversion::writeLine({{"ok", error->isEmpty()}, {"error", *error}});
         QCoreApplication::exit(error->isEmpty() ? 0 : 1);
     };
-    controller->setOption("output", QCoreApplication::applicationDirPath() + "/../../build-tools/queue-check");
+    controller->setOption("output", testOutput("queue-check"));
     controller->setOption("speed", "Fast");
     controller->setOption("threads", 2);
     controller->setOption("batch_workers", 1);
@@ -709,8 +717,7 @@ void runQueueReuseTest(Controller *controller, const QString &fixtures)
                     *error += "Wrong output extension; ";
             QueueItem previous = controller->queue()->items[0];
             controller->clear();
-            previous.source = QCoreApplication::applicationDirPath() +
-                              "/../../build-tools/queue-check/original-no-longer-present.png";
+            previous.source = testOutput("queue-check/original-no-longer-present.png");
             controller->queue()->add({previous});
             *phase = 3;
             controller->setOption("image", "avif");
@@ -744,7 +751,7 @@ void runFormatQueueTest(Controller *controller, const QString &fixtures)
         QCoreApplication::exit(error.isEmpty() ? 0 : 1);
     };
     controller->setOption("delete", false);
-    controller->setOption("output", QCoreApplication::applicationDirPath() + "/../../build-tools/format-queue-check");
+    controller->setOption("output", testOutput("format-queue-check"));
     controller->setOption("mode", "convert");
     controller->setOption("image", "pdf");
     QObject::connect(controller, &Controller::filesAdded, controller, [=] {

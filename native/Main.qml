@@ -224,7 +224,7 @@ ApplicationWindow {
                                 Repeater { model: ["System","Light","Dark"]; delegate: Radio { required property string modelData; text: modelData+(modelData==="System"?"    Follow your system":""); checked: backend.appearance===modelData; onClicked: backend.appearance=modelData; font.pixelSize: 13 } }
                             }
                         }
-                        Text { text: nativePlatform==="Windows"?"Windows Explorer":"File manager"; color: window.fg; font.pixelSize: 17; font.bold: true }
+                        Text { text: nativePlatform==="Windows"?"Windows Explorer":nativePlatform==="macOS"?"Finder":"File manager"; color: window.fg; font.pixelSize: 17; font.bold: true }
                         Card {
                             Layout.fillWidth: true
                             implicitHeight: 90
@@ -233,7 +233,7 @@ ApplicationWindow {
                                 anchors.margins: 16
                                 spacing: 8
                                 Check { text: "Enable “Convert using Athanor” in the context menu"; checked: backend.contextMenus; onToggled: backend.contextMenus=checked; font.pixelSize: 13 }
-                                Text { text: nativePlatform==="Windows"?"On Windows 11, look under Show more options.":"Available through the desktop integration package."; color: window.muted; font.pixelSize: 12 }
+                                Text { text: nativePlatform==="Windows"?"On Windows 11, look under Show more options.":nativePlatform==="macOS"?"Available in Finder Quick Actions and Services.":"Available in KDE service menus and Nautilus/Nemo Scripts."; color: window.muted; font.pixelSize: 12 }
                             }
                         }
                         RowLayout { Layout.fillWidth: true
