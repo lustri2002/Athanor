@@ -41,16 +41,10 @@ static QString tool(QString name)
 #ifdef Q_OS_WIN
     name += ".exe";
 #endif
-    const QString path = Platform::resourceDir() + "/tools/" + name;
-    if (QFileInfo::exists(path))
-        return path;
-#ifdef Q_OS_MACOS
-    for (const QString &folder : {QStringLiteral("/opt/homebrew/bin"), QStringLiteral("/usr/local/bin")})
-        if (QFileInfo::exists(folder + "/" + name))
-            return folder + "/" + name;
-#endif
-    fail("Missing bundled tool: " + name);
-    return {};
+    const QString path = QCoreApplication::applicationDirPath() + "/tools/" + name;
+    if (!QFileInfo::exists(path))
+        fail("Missing bundled tool: " + name);
+    return path;
 }
 
 QJsonObject Options::json() const
@@ -361,7 +355,7 @@ static Frames readFrames(const QString &path, bool strict8bit = false)
             }
             if (animated)
             {
-                Scratch temp(Platform::dataDir() + "/.athanor-apng-XXXXXX");
+                Scratch temp(QCoreApplication::applicationDirPath() + "/.athanor-apng-XXXXXX");
                 if (!temp.isValid())
                     fail("Cannot create animation workspace");
                 auto result = process(tool("ffmpeg"), {"-nostdin", "-hide_banner", "-v", "error", "-i", path, "-vsync",
@@ -474,7 +468,7 @@ static Frames readFrames(const QString &path, bool strict8bit = false)
         return f;
     if (strict8bit)
         fail("Lossless decoding is not available for this source format");
-    Scratch temp(Platform::dataDir() + "/.athanor-decode-XXXXXX");
+    Scratch temp(QCoreApplication::applicationDirPath() + "/.athanor-decode-XXXXXX");
     QStringList decode = {"-nostdin", "-hide_banner", "-v", "error"};
     decode << decoderArguments(path) << "-i" << path << "-frames:v" << "1" << "-pix_fmt" << "rgba"
            << temp.path() + "/decoded.png";
@@ -1010,7 +1004,7 @@ static QStringList gifFilters(const Options &options, bool preview)
 }
 static QByteArray alphaFingerprint(const QString &path, const Options &o, bool original, bool preview)
 {
-    Scratch temp(Platform::dataDir() + "/.athanor-alpha-XXXXXX");
+    Scratch temp(QCoreApplication::applicationDirPath() + "/.athanor-alpha-XXXXXX");
     if (!temp.isValid())
         fail("Cannot create transparency validation workspace");
     QString file = temp.path() + "/alpha.raw";

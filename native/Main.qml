@@ -224,7 +224,7 @@ ApplicationWindow {
                                 Repeater { model: ["System","Light","Dark"]; delegate: Radio { required property string modelData; text: modelData+(modelData==="System"?"    Follow your system":""); checked: backend.appearance===modelData; onClicked: backend.appearance=modelData; font.pixelSize: 13 } }
                             }
                         }
-                        Text { text: nativePlatform==="Windows"?"Windows Explorer":nativePlatform==="macOS"?"Finder":"File manager"; color: window.fg; font.pixelSize: 17; font.bold: true }
+                        Text { text: nativePlatform==="Windows"?"Windows Explorer":"File manager"; color: window.fg; font.pixelSize: 17; font.bold: true }
                         Card {
                             Layout.fillWidth: true
                             implicitHeight: 90
