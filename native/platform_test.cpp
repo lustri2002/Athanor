@@ -67,8 +67,11 @@ int runPlatformTest()
     write(file, "test");
     QProcess automator;
     automator.start("/usr/bin/automator", {"-i", file, root + "/actions/Athanor - Images - Convert to PNG.workflow"});
-    check(automator.waitForFinished(30000) && automator.exitCode() == 0 &&
-          automator.readAllStandardOutput().contains(file.toUtf8()), "Finder workflow did not pass selected path intact: " + QString::fromUtf8(automator.readAllStandardError()));
+    const bool done = automator.waitForFinished(30000);
+    const auto stdoutBytes = automator.readAllStandardOutput();
+    const auto stderrBytes = automator.readAllStandardError();
+    check(done && automator.exitCode() == 0 && QString::fromUtf8(stdoutBytes).normalized().contains(file.normalized()),
+          "Finder workflow did not pass selected path intact: " + QString::fromUtf8(stdoutBytes + stderrBytes));
 #endif
     check(DesktopIntegration::configure(false, "/bin/echo", &error), "Action removal failed: " + error);
     QDirIterator remaining(root + "/actions", QDir::Files, QDirIterator::Subdirectories);

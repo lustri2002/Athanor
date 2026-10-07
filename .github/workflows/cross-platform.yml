@@ -102,9 +102,9 @@ jobs:
           cmake -S . -B .build/native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build .build/native -j2
       - name: Platform and conversion tests
-        run: ctest --test-dir .build/native --output-on-failure
+        run: ATHANOR_TOOLS_DIR="$(cygpath -m "$MINGW_PREFIX/bin")" ctest --test-dir .build/native --output-on-failure
       - name: UI regression captures
-        run: python tests/ui.py .build/native/native/Athanor.exe .build/ui
+        run: ATHANOR_TOOLS_DIR="$(cygpath -m "$MINGW_PREFIX/bin")" python tests/ui.py .build/native/native/Athanor.exe .build/ui
       - name: Bundle and verify the installed app
         run: python scripts/package.py .build/native .build/packages
       - uses: ilammy/msvc-dev-cmd@v1

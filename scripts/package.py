@@ -50,6 +50,8 @@ def verify(binary):
     env.pop("QT_PLUGIN_PATH", None)
     env.pop("QML2_IMPORT_PATH", None)
     env.pop("LD_LIBRARY_PATH", None)
+    env.pop("DYLD_LIBRARY_PATH", None)
+    env.pop("QML_IMPORT_PATH", None)
     run(sys.executable, repo / "tests/smoke.py", binary, env=env)
 
 
@@ -68,6 +70,8 @@ if system == "Darwin":
     (resources / "DEPENDENCIES.txt").write_text(dependencies)
     cellar = Path(subprocess.check_output(["brew", "--cellar"], text=True).strip())
     for formula in cellar.iterdir():
+        if not formula.is_dir():
+            continue
         for installed in formula.iterdir():
             for license_dir in (installed / "share/licenses", installed / ".brew"):
                 if license_dir.exists():
@@ -84,7 +88,7 @@ if system == "Darwin":
         assert "/opt/homebrew/" not in links and "/usr/local/" not in links, links
     verify(binary)
     archive = output / f"Athanor-Alpha-{version}-macOS-{arch}.zip"
-    run("/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, archive)
+    run("/usr/bin/ditto", "-c", "-k", "--keepParent", app, archive)
 elif system == "Linux":
     app = output / "Athanor"
     if app.exists():
