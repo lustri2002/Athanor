@@ -314,7 +314,7 @@ static Frames readFrames(const QString &path, bool strict8bit = false)
         if (file.open(QIODevice::ReadOnly))
         {
             QVector<int> delays;
-            bool animated = false;
+            bool animated = false, highBitDepth = false;
             file.seek(8);
             while (!file.atEnd())
             {
@@ -323,7 +323,14 @@ static Frames readFrames(const QString &path, bool strict8bit = false)
                     break;
                 quint32 length = qFromBigEndian<quint32>(reinterpret_cast<const uchar *>(header.constData()));
                 auto tag = header.mid(4, 4);
-                if (tag == "acTL" && length == 8)
+                if (tag == "IHDR" && length == 13)
+                {
+                    auto chunk = file.read(13);
+                    if (chunk.size() != 13)
+                        fail("Truncated PNG image header");
+                    highBitDepth = uchar(chunk[8]) > 8;
+                }
+                else if (tag == "acTL" && length == 8)
                 {
                     auto chunk = file.read(8);
                     if (chunk.size() != 8)
@@ -352,6 +359,8 @@ static Frames readFrames(const QString &path, bool strict8bit = false)
             }
             if (animated)
             {
+                if (strict8bit && highBitDepth)
+                    fail("Lossless conversion requires an 8-bit source image");
                 Scratch temp(Platform::scratchPattern("athanor-apng"));
                 if (!temp.isValid())
                     fail("Cannot create animation workspace");
@@ -486,6 +495,57 @@ QImage Conversion::readImage(const QString &path, int frame)
     return frames.images.value(qBound(0, frame, frames.images.size() - 1));
 }
 
+static WebPData webpFrame(const QImage &source, const WebPConfig &config)
+{
+    auto image = source.convertToFormat(QImage::Format_RGBA8888);
+    WebPPicture picture;
+    if (!WebPPictureInit(&picture))
+        fail("WebP picture ABI mismatch");
+    picture.use_argb = 1;
+    picture.width = image.width();
+    picture.height = image.height();
+    WebPMemoryWriter writer;
+    WebPMemoryWriterInit(&writer);
+    picture.writer = WebPMemoryWrite;
+    picture.custom_ptr = &writer;
+    if (!WebPPictureImportRGBA(&picture, image.constBits(), image.bytesPerLine()) || !WebPEncode(&config, &picture))
+    {
+        WebPPictureFree(&picture);
+        WebPMemoryWriterClear(&writer);
+        fail("WebP frame encoding failed");
+    }
+    WebPPictureFree(&picture);
+    return {writer.mem, writer.size};
+}
+
+static WebPData webpAnimation(const Frames &f, const WebPConfig &config)
+{
+    std::unique_ptr<WebPMux, decltype(&WebPMuxDelete)> mux(WebPMuxNew(), WebPMuxDelete);
+    if (!mux)
+        fail("Cannot allocate WebP animation muxer");
+    WebPMuxAnimParams params{0, f.loop};
+    if (WebPMuxSetAnimationParams(mux.get(), &params) != WEBP_MUX_OK)
+        fail("Cannot preserve WebP animation loop count");
+    for (int i = 0; i < f.images.size(); i++)
+    {
+        auto data = webpFrame(f.images[i], config);
+        WebPMuxFrameInfo frame{};
+        frame.bitstream = data;
+        frame.duration = f.durations[i];
+        frame.id = WEBP_CHUNK_ANMF;
+        frame.dispose_method = WEBP_MUX_DISPOSE_NONE;
+        frame.blend_method = WEBP_MUX_NO_BLEND;
+        auto result = WebPMuxPushFrame(mux.get(), &frame, 1);
+        WebPDataClear(&data);
+        if (result != WEBP_MUX_OK)
+            fail("Cannot preserve WebP animation frame");
+    }
+    WebPData data{};
+    if (WebPMuxAssemble(mux.get(), &data) != WEBP_MUX_OK)
+        fail("Cannot assemble WebP animation");
+    return data;
+}
+
 static void webp(const Frames &f, const QString &path, int quality, bool lossless = false)
 {
     WebPConfig config;
@@ -500,27 +560,7 @@ static void webp(const Frames &f, const QString &path, int quality, bool lossles
         fail("Invalid WebP configuration");
     WebPData data = {};
     if (lossless && f.images.size() == 1)
-    {
-        auto image = f.images[0].convertToFormat(QImage::Format_RGBA8888);
-        WebPPicture picture;
-        WebPPictureInit(&picture);
-        picture.use_argb = 1;
-        picture.width = image.width();
-        picture.height = image.height();
-        WebPMemoryWriter writer;
-        WebPMemoryWriterInit(&writer);
-        picture.writer = WebPMemoryWrite;
-        picture.custom_ptr = &writer;
-        if (!WebPPictureImportRGBA(&picture, image.constBits(), image.bytesPerLine()) || !WebPEncode(&config, &picture))
-        {
-            WebPPictureFree(&picture);
-            WebPMemoryWriterClear(&writer);
-            fail("Lossless WebP encoding failed");
-        }
-        WebPPictureFree(&picture);
-        data.bytes = writer.mem;
-        data.size = writer.size;
-    }
+        data = webpFrame(f.images[0], config);
     else
     {
         WebPAnimEncoderOptions opts;
@@ -556,6 +596,20 @@ static void webp(const Frames &f, const QString &path, int quality, bool lossles
         if (!WebPAnimEncoderAdd(encoder.get(), nullptr, timestamp, nullptr) ||
             !WebPAnimEncoderAssemble(encoder.get(), &data))
             fail(QString::fromUtf8(WebPAnimEncoderGetError(encoder.get())));
+        std::unique_ptr<WebPDemuxer, decltype(&WebPDemuxDelete)> demux(WebPDemux(&data), WebPDemuxDelete);
+        if (!demux)
+        {
+            WebPDataClear(&data);
+            fail("Cannot inspect encoded WebP animation");
+        }
+        if (f.images.size() > 1 && WebPDemuxGetI(demux.get(), WEBP_FF_FRAME_COUNT) != uint32_t(f.images.size()))
+        {
+            // The animation encoder merges unchanged frames, including an entire
+            // constant animation into a still image. Keep its timing and loop data.
+            demux.reset();
+            WebPDataClear(&data);
+            data = webpAnimation(f, config);
+        }
     }
     if (f.images[0].colorSpace().isValid())
     {
@@ -762,6 +816,8 @@ static void image(const QString &source, const QString &destination, const Optio
 {
     progress(2, "Decoding image");
     Frames frames = readFrames(source, o.imageLossless);
+    const auto durations = frames.durations;
+    const int loop = frames.loop;
     QVector<QByteArray> alpha;
     QVector<QSize> sizes;
     QVector<QByteArray> colors;
@@ -924,6 +980,8 @@ static void image(const QString &source, const QString &destination, const Optio
     Frames result = readFrames(destination);
     if (result.images.size() != sizes.size())
         fail("Image frame count changed during conversion");
+    if (sizes.size() > 1 && (result.durations != durations || result.loop != loop))
+        fail("Image animation timing or loop count changed during conversion");
     for (int i = 0; i < result.images.size(); i++)
         if (result.images[i].size() != sizes[i] || alphaHash(result.images[i]) != alpha[i])
             fail("Image validation failed: dimensions or transparency changed");
@@ -939,6 +997,22 @@ static QJsonObject probe(const QString &path)
     if (r.code)
         fail(QString::fromUtf8(r.error));
     return QJsonDocument::fromJson(r.output).object();
+}
+
+static QSize displayedVideoSize(const QJsonObject &stream)
+{
+    QSize size(stream.value("width").toInt(), stream.value("height").toInt());
+    for (auto value : stream.value("side_data_list").toArray())
+    {
+        const auto sideData = value.toObject();
+        if (!sideData.contains("rotation"))
+            continue;
+        double rotation = std::fmod(std::abs(sideData.value("rotation").toDouble()), 180.0);
+        if (std::abs(rotation - 90.0) < 0.01)
+            size.transpose();
+        break;
+    }
+    return size;
 }
 
 static bool videoHasAlpha(const QString &path)
@@ -1052,17 +1126,17 @@ static void validateVideo(const QString &source, const QString &destination, con
         if (j.value("codec_type") == "audio")
             outAudio++;
     }
+    QSize expectedSize = displayedVideoSize(inVideo);
     if (QFileInfo(source).suffix().compare("gif", Qt::CaseInsensitive) == 0 && !(o.videoLossless && o.video == "mkv"))
     {
-        inVideo["width"] = (inVideo.value("width").toInt() + 1) / 2 * 2;
-        inVideo["height"] = (inVideo.value("height").toInt() + 1) / 2 * 2;
+        expectedSize.setWidth((expectedSize.width() + 1) / 2 * 2);
+        expectedSize.setHeight((expectedSize.height() + 1) / 2 * 2);
     }
     QString expected = o.videoLossless && o.video == "mkv"                                                 ? "ffv1"
                        : videoHasAlpha(source) && o.video != "av1" || o.videoLossless && o.video == "webm" ? "vp9"
                                                                                                            : "av1";
     if (outVideo.value("codec_name") != expected ||
-        (!preview &&
-         (inVideo.value("width") != outVideo.value("width") || inVideo.value("height") != outVideo.value("height"))) ||
+        (!preview && expectedSize != displayedVideoSize(outVideo)) ||
         (o.video != "av1" && inAudio != outAudio))
         fail("Video validation failed");
     progress(97, "Validating video");
@@ -1259,6 +1333,29 @@ static double mediaDuration(const QJsonObject &info)
         duration = qMax(duration, stream.toObject().value("duration").toString().toDouble());
     return duration;
 }
+static double streamDuration(const QJsonObject &stream)
+{
+    bool valid = false;
+    double duration = stream.value("duration").toString().toDouble(&valid);
+    if (valid && duration > 0)
+        return duration;
+    auto timeBase = stream.value("time_base").toString().split('/');
+    if (stream.contains("duration_ts") && timeBase.size() == 2 && timeBase[1].toDouble() > 0)
+    {
+        duration = stream.value("duration_ts").toDouble() * timeBase[0].toDouble() / timeBase[1].toDouble();
+        if (duration > 0)
+            return duration;
+    }
+    const auto tags = stream.value("tags").toObject();
+    for (auto it = tags.begin(); it != tags.end(); ++it)
+        if (it.key().compare("duration", Qt::CaseInsensitive) == 0)
+        {
+            auto parts = it.value().toString().split(':');
+            if (parts.size() == 3)
+                return parts[0].toDouble() * 3600 + parts[1].toDouble() * 60 + parts[2].toDouble();
+        }
+    return 0;
+}
 static void validateMedia(const QString &source, const QString &destination, bool audioOnly, bool silent,
                           Progress progress)
 {
@@ -1274,16 +1371,17 @@ static void validateMedia(const QString &source, const QString &destination, boo
         fail("Output is missing the expected media stream");
     if (!audioOnly)
     {
-        int expectedWidth = inStream.value("width").toInt(), expectedHeight = inStream.value("height").toInt();
+        QSize expectedSize = displayedVideoSize(inStream);
         if (QFileInfo(destination).suffix() == "mp4")
         {
-            expectedWidth = (expectedWidth + 1) / 2 * 2;
-            expectedHeight = (expectedHeight + 1) / 2 * 2;
+            expectedSize.setWidth((expectedSize.width() + 1) / 2 * 2);
+            expectedSize.setHeight((expectedSize.height() + 1) / 2 * 2);
         }
-        if (outStream.value("width").toInt() != expectedWidth || outStream.value("height").toInt() != expectedHeight)
+        if (displayedVideoSize(outStream) != expectedSize)
             fail("Video output dimensions changed unexpectedly");
     }
-    double before = mediaDuration(in), after = mediaDuration(out);
+    double before = audioOnly ? streamDuration(inStream) : mediaDuration(in);
+    double after = audioOnly ? streamDuration(outStream) : mediaDuration(out);
     if (before > 0 && after > 0 && std::abs(before - after) > qMax(0.3, before * 0.02))
         fail("Media output duration changed unexpectedly");
     if (!audioOnly && !silent)
@@ -1306,11 +1404,14 @@ static void validateMedia(const QString &source, const QString &destination, boo
 static void audio(const QString &source, const QString &destination, const Options &o, Progress progress)
 {
     auto info = probe(source);
-    double duration = mediaDuration(info);
+    double duration = 0;
     bool hasAudio = false;
     for (auto v : info.value("streams").toArray())
-        if (v.toObject().value("codec_type") == "audio")
+        if (v.toObject().value("codec_type") == "audio" && !hasAudio)
+        {
             hasAudio = true;
+            duration = streamDuration(v.toObject());
+        }
     if (!hasAudio)
         fail("This file has no audio track to extract");
     auto encode = [&](int bitrate, Progress report) {
@@ -1633,6 +1734,8 @@ QJsonObject Conversion::run(const QJsonObject &spec, Progress progress)
     QFileInfo original(source);
     if (!original.isFile() || category.isEmpty())
         fail("Unsupported or missing input file");
+    if (category == "video" && o.video == "mp4" && o.videoLossless && !o.convertOnly)
+        fail("Lossless MP4 conversion is not supported. Choose MKV to preserve video and audio losslessly.");
     qint64 before = original.size();
     auto modified = original.lastModified();
     bool preview = spec.value("preview").toBool();
