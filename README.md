@@ -49,7 +49,7 @@ cmake -S . -B .build/native -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build .build/native -j2
 ctest --test-dir .build/native --output-on-failure
 xvfb-run -a sh -c 'openbox >/tmp/athanor-openbox.log 2>&1 & exec python3 tests/ui.py .build/native/native/Athanor .build/ui'
-python3 scripts/package.py .build/native .build/packages
+xvfb-run -a sh -c 'openbox >/tmp/athanor-openbox.log 2>&1 & exec python3 scripts/package.py .build/native .build/packages'
 ```
 
 The portable TAR uses linuxdeploy and its Qt plugin to bundle runtime
@@ -126,6 +126,9 @@ lossless modes, PDF structure and page export, target-size modes, Unicode paths,
 file collisions, deletion after validation, failure retention, worker
 cancellation, previews and queue reuse. The original UI harness checks the full
 window and all compact categories and produces reviewable screenshots.
+Packaging repeats the conversion and native UI checks with developer library
+paths removed, and tests macOS/Linux updates against complete relocated app
+trees, including bundled Qt symlinks and codec libraries.
 
 `ATHANOR_TEST=1` prevents tests from installing real user integrations or making
 automatic GitHub requests. Platform tests put file manager actions in temporary

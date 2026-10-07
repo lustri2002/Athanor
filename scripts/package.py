@@ -44,8 +44,8 @@ def copy_tools(destination):
     return tools
 
 
-def verify(binary):
-    env = dict(os.environ, ATHANOR_TEST="1", QT_QPA_PLATFORM={"Darwin": "cocoa", "Windows": "windows", "Linux": "offscreen"}[system])
+def verify(binary, app):
+    env = dict(os.environ, ATHANOR_TEST="1", QT_QPA_PLATFORM={"Darwin": "cocoa", "Windows": "windows", "Linux": "xcb"}[system])
     # Remove developer search paths: launch and convert with the packaged codecs.
     env.pop("ATHANOR_TOOLS_DIR", None)
     env.pop("QT_PLUGIN_PATH", None)
@@ -63,6 +63,8 @@ def verify(binary):
     run(binary, "--qml-check", env=env)
     run(binary, "--quick", "--qml-check", env=env)
     run(sys.executable, repo / "tests/smoke.py", binary, env=env)
+    run(sys.executable, repo / "tests/ui.py", binary, output / "ui-packaged", env=env)
+    run(sys.executable, repo / "tests/updater.py", binary, app, env=env)
 
 
 if system == "Darwin":
@@ -113,7 +115,7 @@ if system == "Darwin":
     for path in [binary, *tools, *(app / "Contents/Frameworks").glob("*.dylib")]:
         links = subprocess.check_output(["otool", "-L", str(path)], text=True)
         assert "/opt/homebrew/" not in links and "/usr/local/" not in links, links
-    verify(binary)
+    verify(binary, app)
     archive = output / f"Athanor-Alpha-{version}-macOS-{arch}.zip"
     run("/usr/bin/ditto", "-c", "-k", "--keepParent", app, archive)
 elif system == "Linux":
@@ -147,7 +149,7 @@ elif system == "Linux":
     if sdk_licenses.exists():
         shutil.copytree(sdk_licenses, app / "usr/licenses/source-codecs", dirs_exist_ok=True)
     shutil.copytree("/usr/share/doc", app / "usr/licenses/system", ignore=lambda directory, names: [name for name in names if name != "copyright" and not (Path(directory) / name).is_dir()])
-    verify(app / "usr/bin/Athanor")
+    verify(app / "usr/bin/Athanor", app)
     run("tar", "-czf", output / f"Athanor-Alpha-{version}-Linux-{arch}.tar.gz", "-C", output, "Athanor")
 else:
     app = output / "Athanor"
@@ -182,6 +184,6 @@ else:
     prefix = Path(command("cmake")).parent.parent
     if (prefix / "share/licenses").exists():
         shutil.copytree(prefix / "share/licenses", app / "licenses/msys2", dirs_exist_ok=True)
-    verify(app / "Athanor.exe")
+    verify(app / "Athanor.exe", app)
     shutil.make_archive(str(output / f"Athanor-Alpha-{version}-Windows-{arch}"), "zip", output, "Athanor")
 print("Verified distributions:", output, flush=True)

@@ -14,6 +14,7 @@ import threading
 import zipfile
 
 binary = Path(sys.argv[1]).resolve()
+package_root = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
 system = {"Darwin": "macOS", "Windows": "Windows", "Linux": "Linux"}[platform.system()]
 arch = {"x86_64": "x64", "AMD64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
 suffix = {"macOS": ".zip", "Windows": ".exe", "Linux": ".tar.gz"}[system]
@@ -34,7 +35,8 @@ class Handler(BaseHTTPRequestHandler):
 
 with tempfile.TemporaryDirectory(prefix="athanor-updater-") as folder:
     root = Path(folder).resolve()
-    env = dict(os.environ, ATHANOR_TEST="1", QT_QPA_PLATFORM="offscreen", ATHANOR_SETTINGS_DIR=str(root / "settings"))
+    qpa = {"macOS": "cocoa", "Windows": "windows", "Linux": "xcb"}[system] if package_root else "offscreen"
+    env = dict(os.environ, ATHANOR_TEST="1", QT_QPA_PLATFORM=qpa, ATHANOR_SETTINGS_DIR=str(root / "settings"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -74,21 +76,29 @@ with tempfile.TemporaryDirectory(prefix="athanor-updater-") as folder:
         target = root / name
         replacement = root / "new" / name
         for destination in (target, replacement):
-            (destination / executable).parent.mkdir(parents=True)
-            shutil.copy2(binary, destination / executable)
+            if package_root:
+                shutil.copytree(package_root, destination, symlinks=True)
+            else:
+                (destination / executable).parent.mkdir(parents=True)
+                shutil.copy2(binary, destination / executable)
             if system == "Linux":
                 (destination / ".athanor-portable").write_text("portable\n")
         (target / "generation").write_text("old")
         (replacement / "generation").write_text("new")
         archive = root / ("update" + suffix)
-        if system == "macOS":
-            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zip:
-                for path in replacement.rglob("*"):
-                    if path.is_file():
-                        zip.write(path, path.relative_to(replacement.parent))
-        else:
-            with tarfile.open(archive, "w:gz") as tar:
-                tar.add(replacement, arcname=name)
+        def make_archive(path):
+            if system == "macOS" and package_root:
+                # Match the release packager, including Qt framework symlinks.
+                subprocess.run(["/usr/bin/ditto", "-c", "-k", "--keepParent", str(replacement), str(path)], check=True)
+            elif system == "macOS":
+                with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zip:
+                    for entry in replacement.rglob("*"):
+                        if entry.is_file():
+                            zip.write(entry, entry.relative_to(replacement.parent))
+            else:
+                with tarfile.open(path, "w:gz") as tar:
+                    tar.add(replacement, arcname=name)
+        make_archive(archive)
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(.5)"])
         reaper = threading.Thread(target=parent.wait)
@@ -103,14 +113,7 @@ with tempfile.TemporaryDirectory(prefix="athanor-updater-") as folder:
         # A verified archive whose replacement cannot launch must keep the old app.
         (replacement / executable).write_bytes(b"not an executable")
         broken_archive = root / ("broken" + suffix)
-        if system == "macOS":
-            with zipfile.ZipFile(broken_archive, "w") as zip:
-                for path in replacement.rglob("*"):
-                    if path.is_file():
-                        zip.write(path, path.relative_to(replacement.parent))
-        else:
-            with tarfile.open(broken_archive, "w:gz") as tar:
-                tar.add(replacement, arcname=name)
+        make_archive(broken_archive)
         digest = hashlib.sha256(broken_archive.read_bytes()).hexdigest()
         rejected = subprocess.run([str(target / executable), "--apply-update", str(broken_archive), str(target), str(os.getpid()), digest], env=env, capture_output=True, text=True, encoding="utf-8", timeout=15)
         assert rejected.returncode != 0 and (target / "generation").read_text() == "new"
