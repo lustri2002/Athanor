@@ -70,7 +70,7 @@ int runPlatformTest()
     const bool done = automator.waitForFinished(30000);
     const auto stdoutBytes = automator.readAllStandardOutput();
     const auto stderrBytes = automator.readAllStandardError();
-    check(done && automator.exitCode() == 0 && QString::fromUtf8(stdoutBytes).normalized().contains(file.normalized()),
+    check(done && automator.exitCode() == 0 && QString::fromUtf8(stdoutBytes).normalized(QString::NormalizationForm_C).contains(file.normalized(QString::NormalizationForm_C)),
           "Finder workflow did not pass selected path intact: " + QString::fromUtf8(stdoutBytes + stderrBytes));
 #endif
     check(DesktopIntegration::configure(false, "/bin/echo", &error), "Action removal failed: " + error);

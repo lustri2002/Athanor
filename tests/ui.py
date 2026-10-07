@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix="athanor-ui-") as folder:
         args = [str(binary), "--self-test", str(target)]
         if mode != "main":
             args.append("--quick")
-        result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(args, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
         state_file = target / "ui-result.json"
         assert state_file.exists(), (mode, result.stdout, result.stderr)
         state = json.loads(state_file.read_text())

@@ -52,7 +52,7 @@ def pdf(path):
 def run(binary, root, *args, ok=True):
     env = dict(os.environ, ATHANOR_TEST="1", ATHANOR_SETTINGS_DIR=str(root / "settings"),
                ATHANOR_TEST_FIXTURES=str(root), ATHANOR_TEST_OUTPUT_DIR=str(root / "test-output"))
-    result = subprocess.run([str(binary), *map(str, args)], capture_output=True, text=True, env=env, timeout=180)
+    result = subprocess.run([str(binary), *map(str, args)], capture_output=True, text=True, encoding="utf-8", env=env, timeout=180)
     records = []
     for line in result.stdout.splitlines():
         try:

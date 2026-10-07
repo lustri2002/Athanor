@@ -10,6 +10,11 @@
 #include <QStyleHints>
 #include <QSystemTrayIcon>
 #include <QTimer>
+#include <QStandardPaths>
+#include <QElapsedTimer>
+#ifdef Q_OS_LINUX
+#include <QDBusInterface>
+#endif
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <shellapi.h>
@@ -125,6 +130,16 @@ bool Platform::contextMenu(bool enabled, const QString &executable, QString *err
 }
 void Platform::notify(const QString &title, const QString &message)
 {
+#ifdef Q_OS_LINUX
+    QDBusInterface notifications("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                                 "org.freedesktop.Notifications");
+    if (notifications.isValid())
+    {
+        notifications.asyncCallWithArgumentList("Notify", {"Athanor", uint(0), "io.github.SixFawn253.Athanor",
+                                                          title, message, QStringList{}, QVariantMap{}, 5000});
+        return;
+    }
+#endif
     static QSystemTrayIcon *tray = nullptr;
     if (!tray)
     {
@@ -156,7 +171,30 @@ bool Platform::animationsEnabled()
 #elif defined(Q_OS_MACOS)
     return ::athanorMacAnimationsEnabled();
 #else
-    QSettings desktop("org.gnome.desktop.interface", QSettings::NativeFormat);
-    return desktop.value("enable-animations", true).toBool();
+    // GNOME stores this preference in dconf, not in a QSettings ini file.
+    // Cache the short subprocess query to keep the UI's polling timer cheap.
+    static QElapsedTimer checked;
+    static bool enabled = true;
+    if (checked.isValid() && checked.elapsed() < 5000)
+        return enabled;
+    checked.start();
+    const auto desktop = qEnvironmentVariable("XDG_CURRENT_DESKTOP");
+    if (desktop.contains("KDE", Qt::CaseInsensitive))
+    {
+        QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/kdeglobals", QSettings::IniFormat);
+        enabled = settings.value("KDE/AnimationDurationFactor", 1.0).toDouble() > 0;
+    }
+    else
+    {
+        const auto gsettings = QStandardPaths::findExecutable("gsettings");
+        if (!gsettings.isEmpty())
+        {
+            QProcess process;
+            process.start(gsettings, {"get", "org.gnome.desktop.interface", "enable-animations"});
+            if (process.waitForFinished(500) && process.exitCode() == 0)
+                enabled = process.readAllStandardOutput().trimmed() != "false";
+        }
+    }
+    return enabled;
 #endif
 }
