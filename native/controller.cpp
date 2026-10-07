@@ -119,7 +119,7 @@ Controller::Controller(bool quick, QObject *parent) : QObject(parent), compact(q
     connect(&revealDeadline, &QTimer::timeout, this, &Controller::transitionExpired);
     QString settingsDirectory = qEnvironmentVariable("ATHANOR_SETTINGS_DIR");
     if (settingsDirectory.isEmpty())
-        settingsDirectory = QCoreApplication::applicationDirPath();
+        settingsDirectory = Platform::dataDir();
     QDir().mkpath(settingsDirectory);
     settingsPath = settingsDirectory + "/settings.json";
     QFile file(settingsPath);
@@ -751,7 +751,7 @@ void Controller::launchPreview(const QString &source, int quality, int)
     previewRunning = true;
     previewFailure.clear();
     previewAfter.clear();
-    previewDirectory = std::make_unique<Scratch>(QCoreApplication::applicationDirPath() + "/.athanor-preview-XXXXXX");
+    previewDirectory = std::make_unique<Scratch>(Platform::dataDir() + "/.athanor-preview-XXXXXX");
     previewProcess = new ChildProcess(this);
     int generation = ++previewGeneration;
     auto *p = previewProcess;

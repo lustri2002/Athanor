@@ -71,7 +71,7 @@ class IconProvider : public QQuickImageProvider
     QImage requestImage(const QString &id, QSize *size, const QSize &requested) override
     {
         QString name = id.section('/', 0, 0), color = id.section('/', 1, 1);
-        QString svg = QCoreApplication::applicationDirPath() + "/assets/" + name + ".svg";
+        QString svg = Platform::resourceDir() + "/assets/" + name + ".svg";
         QImage image;
         if (QFileInfo::exists(svg))
         {
@@ -83,7 +83,7 @@ class IconProvider : public QQuickImageProvider
             renderer.render(&painter);
         }
         else
-            image.load(QCoreApplication::applicationDirPath() + "/assets/" + name + ".png");
+            image.load(Platform::resourceDir() + "/assets/" + name + ".png");
         if (image.isNull())
             return {};
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
@@ -281,11 +281,13 @@ int main(int argc, char **argv)
     engine.rootContext()->setContextProperty("nativePlatform", QString(
 #ifdef Q_OS_WIN
                                                                    "Windows"
+#elif defined(Q_OS_MACOS)
+                                                                   "macOS"
 #else
                                                                    "Linux"
 #endif
                                                                    ));
-    application.setWindowIcon(QIcon(QCoreApplication::applicationDirPath() + "/assets/athanor.ico"));
+    application.setWindowIcon(QIcon(Platform::resourceDir() + "/assets/athanor.ico"));
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &application, [] { QCoreApplication::exit(2); },
         Qt::QueuedConnection);

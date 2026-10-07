@@ -1,6 +1,7 @@
 #include "ui_test.h"
 #include "controller.h"
 #include "conversion.h"
+#include "platform.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
