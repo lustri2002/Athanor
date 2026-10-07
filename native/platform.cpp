@@ -6,7 +6,6 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QSettings>
-#include <QStandardPaths>
 #include <QStyleHints>
 #include <QSystemTrayIcon>
 #include <QTimer>
@@ -126,7 +125,7 @@ void Platform::notify(const QString &title, const QString &message)
     static QSystemTrayIcon *tray = nullptr;
     if (!tray)
     {
-        tray = new QSystemTrayIcon(QIcon(Platform::resourceDir() + "/assets/athanor.ico"), qApp);
+        tray = new QSystemTrayIcon(QIcon(QCoreApplication::applicationDirPath() + "/assets/athanor.ico"), qApp);
         tray->setToolTip("Athanor");
         tray->show();
     }
@@ -154,22 +153,5 @@ bool Platform::animationsEnabled()
 #else
     QSettings desktop("org.gnome.desktop.interface", QSettings::NativeFormat);
     return desktop.value("enable-animations", true).toBool();
-#endif
-}
-
-QString Platform::resourceDir()
-{
-#ifdef Q_OS_MACOS
-    return QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../Resources");
-#else
-    return QCoreApplication::applicationDirPath();
-#endif
-}
-QString Platform::dataDir()
-{
-#ifdef Q_OS_MACOS
-    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-#else
-    return QCoreApplication::applicationDirPath();
 #endif
 }
