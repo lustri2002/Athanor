@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,15 @@ def verify(binary):
     env.pop("LD_LIBRARY_PATH", None)
     env.pop("DYLD_LIBRARY_PATH", None)
     env.pop("QML_IMPORT_PATH", None)
+    if system == "Windows":
+        windows = Path(os.environ["SystemRoot"])
+        env["PATH"] = os.pathsep.join(map(str, [binary.parent, binary.parent / "tools", windows / "System32", windows]))
+    elif system == "Darwin":
+        env["PATH"] = os.pathsep.join(map(str, [binary.parent, binary.parent.parent / "Resources/tools", "/usr/bin", "/bin"]))
+    else:
+        env["PATH"] = os.pathsep.join(map(str, [binary.parent, "/usr/bin", "/bin"]))
+    run(binary, "--qml-check", env=env)
+    run(binary, "--quick", "--qml-check", env=env)
     run(sys.executable, repo / "tests/smoke.py", binary, env=env)
 
 
@@ -79,7 +89,11 @@ if system == "Darwin":
             for license_file in installed.glob("*COPYING*"):
                 shutil.copy2(license_file, resources / "licenses" / (formula.name + "-" + license_file.name))
     run(command("macdeployqt", "macdeployqt6"), app, "-qmldir=" + str(repo / "native"),
-        *("-executable=" + str(tool) for tool in tools), "-always-overwrite")
+        *("-executable=" + str(tool) for tool in tools), "-verbose=1")
+    # macdeployqt rewrites dependency references, but some Homebrew dylibs keep
+    # an absolute install ID. Normalize those IDs before signing the bundle.
+    for library in (app / "Contents/Frameworks").glob("*.dylib"):
+        run("/usr/bin/install_name_tool", "-id", "@rpath/" + library.name, library)
     run("/usr/bin/codesign", "--force", "--deep", "--sign", "-", app)
     binary = app / "Contents/MacOS/Athanor"
     # macdeployqt also relocates the bundled tools' non-Qt dylibs.

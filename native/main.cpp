@@ -170,6 +170,9 @@ int main(int argc, char **argv)
     parser.addOption(QCommandLineOption("delete-originals", "Delete originals after validated conversion", "", ""));
     parser.addOption(QCommandLineOption("include-subfolders", "Include subfolders", "", ""));
     parser.addPositionalArgument("files", "Input files", "[files...]");
+    QCommandLineOption qmlCheck("qml-check");
+    qmlCheck.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(qmlCheck);
     QCommandLineOption platformTest("platform-test");
     platformTest.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(platformTest);
@@ -265,7 +268,7 @@ int main(int argc, char **argv)
         }
         return errors ? 1 : 0;
     }
-    if (parser.isSet("self-test") || parser.isSet("controller-test") || parser.isSet("queue-test") ||
+    if (parser.isSet("qml-check") || parser.isSet("self-test") || parser.isSet("controller-test") || parser.isSet("queue-test") ||
         parser.isSet("format-queue-test") || parser.isSet("update-test"))
         qputenv("ATHANOR_TEST", "1");
     bool quick = parser.isSet("quick") || parser.value("target") != "auto";
@@ -329,6 +332,8 @@ int main(int argc, char **argv)
                 Conversion::writeLine({{"ui_warning", error.toString()}});
         });
     engine.loadFromModule("Athanor", quick ? "Quick" : "Main");
+    if (parser.isSet("qml-check"))
+        return engine.rootObjects().isEmpty() ? 2 : 0;
     if (parser.isSet("self-test"))
         runUiTest(&engine, &controller, parser.value("self-test"), quick);
     return application.exec();

@@ -158,7 +158,7 @@ ApplicationWindow {
                                 FormatSelect { Layout.fillWidth: true; label: "PDF output"; formats: Formats.documents; value: backend.options.pdf_output==="jpg"?"jpg-pages":"pdf"; optionKey: "pdf_output"; onInfoRequested: function(key){formatGuide.openFormat(key)} }
                                 Text { opacity: backend.options.size_mode?0:1; text: backend.options.pdf_output==="jpg"?"Page resolution · DPI":"Compression profile"; color: Theme.muted; font.pixelSize: 12 }
                                 Item { opacity: backend.options.size_mode?0:1; enabled: opacity>0; Layout.fillWidth: true; Layout.preferredHeight: 42
-                                    Field { anchors.fill: parent; visible: backend.options.pdf_output!=="jpg"; accessibleLabel: "PDF compression"; model: backend.options.convert_only?["Lossless"]:backend.options.size_mode?["Automatic"]:["Balanced — 150 dpi","Smallest — 100 dpi","Extreme — 72 dpi","Lossless"]; currentIndex: backend.options.size_mode||backend.options.convert_only?0:["balanced","smallest","extreme","lossless"].indexOf(backend.options.pdf); enabled: !backend.busy&&!backend.options.size_mode&&!backend.options.convert_only; onActivated: backend.setOption("pdf",["balanced","smallest","extreme","lossless"][index]) }
+                                    Field { anchors.fill: parent; visible: backend.options.pdf_output!=="jpg"; accessibleLabel: "PDF compression"; model: backend.options.convert_only?["Lossless"]:backend.options.size_mode?["Automatic"]:["Balanced — 150 dpi","Smallest — 100 dpi","Extreme — 72 dpi","Lossless"]; currentIndex: backend.options.size_mode||backend.options.convert_only?0:["balanced","smallest","extreme","lossless"].indexOf(backend.options.pdf); enabled: !backend.busy&&!backend.options.size_mode&&!backend.options.convert_only; onActivated: function(index){backend.setOption("pdf",["balanced","smallest","extreme","lossless"][index]) } }
                                     Spin { visible: backend.options.pdf_output==="jpg"; from: 36; to: 600; stepSize: 12; value: backend.options.pdf_dpi; enabled: !backend.busy; Accessible.name: "PDF rendering DPI"; onValueModified: backend.setOption("pdf_dpi",value) }
                                 }
                             }
@@ -239,7 +239,7 @@ ApplicationWindow {
                         RowLayout { Layout.fillWidth: true
                             Text { text: "Motion"; color: Theme.text; font.pixelSize: 17; font.weight: Font.DemiBold }
                             Item { Layout.fillWidth: true }
-                            Field { Layout.preferredWidth: 280; accessibleLabel: "Animation preference"; model: ["Follow system","Full animations","Reduced motion"]; currentIndex: ["System","Full","Reduced"].indexOf(backend.motion); onActivated: backend.motion=["System","Full","Reduced"][index] }
+                            Field { Layout.preferredWidth: 280; accessibleLabel: "Animation preference"; model: ["Follow system","Full animations","Reduced motion"]; currentIndex: ["System","Full","Reduced"].indexOf(backend.motion); onActivated: function(index){backend.motion=["System","Full","Reduced"][index]} }
                         }
                         Text { text: "Updates"; color: Theme.text; font.pixelSize: 17; font.weight: Font.DemiBold }
                         Card {
@@ -269,8 +269,8 @@ ApplicationWindow {
                                 Text { text: "Video acceleration"; color: window.muted; font.pixelSize: 12 }
                                 Text { text: "Files at once"; color: window.muted; font.pixelSize: 12 }
                                 Text { text: "Threads (0 = auto)"; color: window.muted; font.pixelSize: 12 }
-                                Field { Layout.fillWidth: true; accessibleLabel: "Encoding speed"; model: ["Fast","Balanced","Smallest"]; currentIndex: model.indexOf(backend.options.speed); enabled: !backend.busy; onActivated: backend.setOption("speed",model[index]) }
-                                Field { Layout.fillWidth: true; accessibleLabel: "Video acceleration"; model: ["Auto","CPU"]; currentIndex: backend.options.acceleration==="CPU"?1:0; enabled: !backend.busy; onActivated: backend.setOption("acceleration",model[index]) }
+                                Field { Layout.fillWidth: true; accessibleLabel: "Encoding speed"; model: ["Fast","Balanced","Smallest"]; currentIndex: model.indexOf(backend.options.speed); enabled: !backend.busy; onActivated: function(index){backend.setOption("speed",model[index]) } }
+                                Field { Layout.fillWidth: true; accessibleLabel: "Video acceleration"; model: ["Auto","CPU"]; currentIndex: backend.options.acceleration==="CPU"?1:0; enabled: !backend.busy; onActivated: function(index){backend.setOption("acceleration",model[index]) } }
                                 Spin { Accessible.name: "Parallel files"; Layout.fillWidth: true; from: 1; to: 8; value: backend.options.batch_workers; enabled: !backend.busy; onValueModified: backend.setOption("batch_workers",value) }
                                 Spin { Accessible.name: "CPU threads"; Layout.fillWidth: true; from: 0; to: 256; editable: true; value: backend.options.threads; enabled: !backend.busy; onValueModified: backend.setOption("threads",value) }
                                 Text { Layout.columnSpan: 4; Layout.fillWidth: true; text: "Faster encoding trades some size efficiency for speed. Auto tries GPU AV1 video encoding, then CPU."; color: window.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.topMargin: 8 }

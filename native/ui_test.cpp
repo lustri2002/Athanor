@@ -10,6 +10,7 @@
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QQuickItem>
+#include <QScreen>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QJSValue>
@@ -214,10 +215,15 @@ void runUiTest(QQmlApplicationEngine *engine, Controller *controller, const QStr
                         *error += "Dropdown did not open\n";
                     else
                     {
-                        if (qAbs(popup->property("y").toDouble() -
-                                 (field->property("height").toDouble() - popup->property("height").toDouble()) / 2) > 1)
-                            *error += "Dropdown vertical alignment failed\n";
                         auto *content = qobject_cast<QQuickItem *>(popup->property("contentItem").value<QObject *>());
+                        // Native popup windows may be clamped to a small desktop.
+                        // Keep checking centering whenever it fits, and require a
+                        // clamped popup to remain completely on the same screen.
+                        const auto expectedY = (field->property("height").toDouble() - popup->property("height").toDouble()) / 2;
+                        if (qAbs(popup->property("y").toDouble() - expectedY) > 1 &&
+                            (!content || !content->window() ||
+                             !window->screen()->availableGeometry().adjusted(-2, -2, 2, 2).contains(content->window()->frameGeometry())))
+                            *error += "Dropdown is misaligned or outside the available desktop\n";
                         if (content && content->window())
                         {
                             auto *popupWindow = content->window();

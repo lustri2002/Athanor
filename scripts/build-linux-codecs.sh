@@ -19,7 +19,7 @@ cp "$work/mupdf/build/release/libmupdf.a" "$work/mupdf/build/release/libmupdf-th
 cp "$work/mupdf/COPYING" "$prefix/licenses/MuPDF-COPYING"
 clone avif v1.4.2 https://github.com/AOMediaCodec/libavif.git
 cmake -S "$work/avif" -B "$work/avif-build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
-    -DBUILD_SHARED_LIBS=ON -DAVIF_CODEC_AOM=SYSTEM -DAVIF_CODEC_DAV1D=SYSTEM -DAVIF_LIBYUV=OFF -DAVIF_BUILD_APPS=ON
+    -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' -DBUILD_SHARED_LIBS=ON -DAVIF_CODEC_AOM=SYSTEM -DAVIF_CODEC_DAV1D=SYSTEM -DAVIF_LIBYUV=OFF -DAVIF_BUILD_APPS=ON
 cmake --build "$work/avif-build" -j2
 cmake --install "$work/avif-build"
 cp "$work/avif/LICENSE" "$prefix/licenses/libavif-LICENSE"
