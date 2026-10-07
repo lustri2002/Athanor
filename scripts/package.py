@@ -94,6 +94,14 @@ if system == "Darwin":
     # an absolute install ID. Normalize those IDs before signing the bundle.
     for library in (app / "Contents/Frameworks").glob("*.dylib"):
         run("/usr/bin/install_name_tool", "-id", "@rpath/" + library.name, library)
+        commands = subprocess.check_output(["otool", "-l", str(library)], text=True)
+        paths = [line.strip().split(" (offset", 1)[0][5:] for line in commands.splitlines() if line.strip().startswith("path ")]
+        if "@loader_path" not in paths:
+            run("/usr/bin/install_name_tool", "-add_rpath", "@loader_path", library)
+    for tool in tools:
+        commands = subprocess.check_output(["otool", "-l", str(tool)], text=True)
+        if "@loader_path/../../Frameworks" not in commands:
+            run("/usr/bin/install_name_tool", "-add_rpath", "@loader_path/../../Frameworks", tool)
     # Executables under Resources/tools are not discovered by --deep. Sign
     # these explicit code objects after install_name_tool rewrites their links.
     for tool in tools:
