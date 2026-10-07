@@ -140,7 +140,7 @@ struct ProcessResult
     QByteArray output, error;
 };
 static ProcessResult process(const QString &program, const QStringList &args, Progress progress = {},
-                             double duration = 0)
+                             double duration = 0, const std::function<void(const QByteArray &)> &consumeOutput = {})
 {
     ChildProcess p;
     Platform::setupProcess(&p);
@@ -155,10 +155,15 @@ static ProcessResult process(const QString &program, const QStringList &args, Pr
     {
         p.waitForReadyRead(60);
         QByteArray data = p.readAllStandardOutput();
-        result.output += data;
+        if (consumeOutput)
+            consumeOutput(data);
+        else
+            result.output += data;
         result.error += p.readAllStandardError();
         if (result.error.size() > 65536)
             result.error = result.error.right(65536);
+        if (consumeOutput)
+            continue;
         pending += data;
         while (pending.contains('\n'))
         {
@@ -172,7 +177,11 @@ static ProcessResult process(const QString &program, const QStringList &args, Pr
             }
         }
     }
-    result.output += p.readAllStandardOutput();
+    auto remaining = p.readAllStandardOutput();
+    if (consumeOutput)
+        consumeOutput(remaining);
+    else
+        result.output += remaining;
     result.error += p.readAllStandardError();
     result.code = p.exitStatus() == QProcess::NormalExit ? p.exitCode() : -1;
     return result;
@@ -491,8 +500,167 @@ static Frames readFrames(const QString &path, bool strict8bit = false)
 
 QImage Conversion::readImage(const QString &path, int frame)
 {
-    auto frames = readFrames(path);
-    return frames.images.value(qBound(0, frame, frames.images.size() - 1));
+    frame = qMax(0, frame);
+    const auto suffix = QFileInfo(path).suffix().toLower();
+    if (suffix == "avif")
+    {
+        std::unique_ptr<avifDecoder, decltype(&avifDecoderDestroy)> decoder(avifDecoderCreate(), avifDecoderDestroy);
+        if (!decoder)
+            fail("Cannot allocate AVIF decoder");
+        decoder->maxThreads = qMin(8, QThread::idealThreadCount());
+        decoder->imageDimensionLimit = 0;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            fail(file.errorString());
+        const auto bytes = file.readAll();
+        auto result = avifDecoderSetIOMemory(decoder.get(), reinterpret_cast<const uint8_t *>(bytes.constData()),
+                                            size_t(bytes.size()));
+        if (result == AVIF_RESULT_OK)
+            result = avifDecoderParse(decoder.get());
+        if (result != AVIF_RESULT_OK || decoder->imageCount <= 0)
+            fail("AVIF parse: " + QString::fromUtf8(avifResultToString(result)));
+        result = avifDecoderNthImage(decoder.get(), uint32_t(qMin(frame, decoder->imageCount - 1)));
+        if (result != AVIF_RESULT_OK)
+            fail(QString::fromUtf8(avifResultToString(result)));
+        return avifFrame(decoder.get());
+    }
+    if (suffix == "heic" || suffix == "heif")
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            fail(file.errorString());
+        const auto bytes = file.readAll();
+        std::unique_ptr<heif_context, decltype(&heif_context_free)> context(heif_context_alloc(), heif_context_free);
+        if (!context)
+            fail("Cannot allocate HEIF decoder");
+        auto error = heif_context_read_from_memory_without_copy(context.get(), bytes.constData(), size_t(bytes.size()), nullptr);
+        if (error.code)
+            fail(QString::fromUtf8(error.message));
+        const int count = heif_context_get_number_of_top_level_images(context.get());
+        if (count <= 0)
+            fail("HEIF contains no image");
+        QVector<heif_item_id> ids(count);
+        heif_context_get_list_of_top_level_image_IDs(context.get(), ids.data(), count);
+        heif_item_id primary = 0;
+        heif_context_get_primary_image_ID(context.get(), &primary);
+        const auto primaryIndex = ids.indexOf(primary);
+        if (primaryIndex > 0)
+            ids.move(primaryIndex, 0);
+        heif_image_handle *rawHandle = nullptr;
+        error = heif_context_get_image_handle(context.get(), ids[qMin(frame, count - 1)], &rawHandle);
+        if (error.code)
+            fail(QString::fromUtf8(error.message));
+        std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle(rawHandle, heif_image_handle_release);
+        heif_image *rawImage = nullptr;
+        error = heif_decode_image(handle.get(), &rawImage, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, nullptr);
+        if (error.code)
+            fail(QString::fromUtf8(error.message));
+        std::unique_ptr<heif_image, decltype(&heif_image_release)> decoded(rawImage, heif_image_release);
+        int stride = 0;
+        const auto pixels = heif_image_get_plane_readonly(decoded.get(), heif_channel_interleaved, &stride);
+        const int width = heif_image_get_primary_width(decoded.get()), height = heif_image_get_primary_height(decoded.get());
+        if (!pixels || width <= 0 || height <= 0)
+            fail("Invalid HEIF image plane");
+        auto image = QImage(pixels, width, height, stride, QImage::Format_RGBA8888).copy();
+        const auto profileSize = heif_image_handle_get_raw_color_profile_size(handle.get());
+        if (profileSize)
+        {
+            QByteArray profile(qsizetype(profileSize), 0);
+            if (heif_image_handle_get_raw_color_profile(handle.get(), profile.data()).code == 0)
+                image.setColorSpace(QColorSpace::fromIccProfile(profile));
+        }
+        return image;
+    }
+    if (suffix == "webp")
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            fail(file.errorString());
+        const auto bytes = file.readAll();
+        WebPData data{reinterpret_cast<const uint8_t *>(bytes.constData()), size_t(bytes.size())};
+        WebPAnimDecoderOptions options;
+        WebPAnimDecoderOptionsInit(&options);
+        options.color_mode = MODE_RGBA;
+        std::unique_ptr<WebPAnimDecoder, decltype(&WebPAnimDecoderDelete)> decoder(WebPAnimDecoderNew(&data, &options),
+                                                                               WebPAnimDecoderDelete);
+        WebPAnimInfo info{};
+        if (!decoder || !WebPAnimDecoderGetInfo(decoder.get(), &info) || info.frame_count == 0)
+            fail("Unable to decode WebP");
+        const int selected = qMin(frame, int(info.frame_count) - 1);
+        uint8_t *pixels = nullptr;
+        int timestamp = 0;
+        for (int i = 0; i <= selected; i++)
+            if (!WebPAnimDecoderGetNext(decoder.get(), &pixels, &timestamp))
+                fail("WebP frame decode failed");
+        auto image = QImage(pixels, info.canvas_width, info.canvas_height, info.canvas_width * 4,
+                            QImage::Format_RGBA8888).copy();
+        WebPChunkIterator chunk;
+        if (WebPDemuxGetChunk(WebPAnimDecoderGetDemuxer(decoder.get()), "ICCP", 1, &chunk))
+        {
+            image.setColorSpace(QColorSpace::fromIccProfile(
+                QByteArray(reinterpret_cast<const char *>(chunk.chunk.bytes), qsizetype(chunk.chunk.size))));
+            WebPDemuxReleaseChunkIterator(&chunk);
+        }
+        return image;
+    }
+    if (suffix == "png" || suffix == "apng")
+    {
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly))
+        {
+            file.seek(8);
+            while (!file.atEnd())
+            {
+                const auto header = file.read(8);
+                if (header.size() != 8)
+                    break;
+                const auto length = qFromBigEndian<quint32>(reinterpret_cast<const uchar *>(header.constData()));
+                const auto tag = header.mid(4, 4);
+                if (tag == "acTL" && length == 8)
+                {
+                    const auto animation = file.read(8);
+                    if (animation.size() != 8)
+                        fail("Truncated APNG animation header");
+                    const auto count = qFromBigEndian<quint32>(reinterpret_cast<const uchar *>(animation.constData()));
+                    if (count == 0)
+                        fail("APNG contains no frames");
+                    Scratch temp(Platform::scratchPattern("athanor-decode"));
+                    if (!temp.isValid())
+                        fail("Cannot create image workspace");
+                    const auto output = temp.path() + "/decoded.png";
+                    const auto selected = qMin<quint32>(quint32(frame), count - 1);
+                    auto result = process(tool("ffmpeg"), {"-nostdin", "-v", "error", "-i", path, "-vf",
+                                          QString("select=eq(n\\,%1)").arg(selected), "-frames:v", "1", "-fps_mode",
+                                          "passthrough", "-pix_fmt", "rgba", output});
+                    if (result.code)
+                        fail(QString::fromUtf8(result.error));
+                    QImage image(output);
+                    if (image.isNull())
+                        fail("APNG frame decode failed");
+                    return image;
+                }
+                if (!file.seek(file.pos() + length + 4) || tag == "IEND")
+                    break;
+            }
+        }
+    }
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    reader.setAllocationLimit(0);
+    QImage selected;
+    for (int i = 0; i <= frame; i++)
+    {
+        const auto image = reader.read();
+        if (image.isNull())
+            break;
+        selected = image;
+        if (!reader.supportsAnimation() || !reader.canRead())
+            break;
+    }
+    if (!selected.isNull())
+        return selected.convertToFormat(QImage::Format_RGBA8888);
+    // Other formats already use a single-frame FFmpeg fallback in readFrames.
+    return readFrames(path).images.value(0);
 }
 
 static WebPData webpFrame(const QImage &source, const WebPConfig &config)
@@ -1075,10 +1243,6 @@ static QStringList gifFilters(const Options &options, bool preview)
 }
 static QByteArray alphaFingerprint(const QString &path, const Options &o, bool original, bool preview)
 {
-    Scratch temp(Platform::scratchPattern("athanor-alpha"));
-    if (!temp.isValid())
-        fail("Cannot create transparency validation workspace");
-    QString file = temp.path() + "/alpha.raw";
     QStringList args = {"-nostdin", "-v", "error", "-y"};
     args << decoderArguments(path) << "-i" << path;
     QStringList filters;
@@ -1092,19 +1256,15 @@ static QByteArray alphaFingerprint(const QString &path, const Options &o, bool o
     if (original && preview)
         args << "-t" << "1";
     filters << "format=rgba" << "alphaextract";
-    args << "-vf" << filters.join(',') << "-fps_mode" << "passthrough" << "-pix_fmt" << "gray" << "-f" << "rawvideo" << file;
-    auto result = process(tool("ffmpeg"), args);
+    args << "-vf" << filters.join(',') << "-fps_mode" << "passthrough" << "-pix_fmt" << "gray" << "-f" << "rawvideo" << "pipe:1";
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    auto result = process(tool("ffmpeg"), args, {}, 0, [&](const QByteArray &bytes) { hash.addData(bytes); });
     if (result.code)
         fail("Transparency decode failed: " + QString::fromUtf8(result.error));
-    QFile data(file);
-    if (!data.open(QIODevice::ReadOnly))
-        fail("Cannot read alpha validation data");
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    hash.addData(&data);
     return hash.result();
 }
 static void validateVideo(const QString &source, const QString &destination, const Options &o, Progress progress,
-                          bool preview)
+                          bool preview, QByteArray &sourceAlpha)
 {
     auto info = probe(source);
     auto output = probe(destination);
@@ -1145,13 +1305,17 @@ static void validateVideo(const QString &source, const QString &destination, con
     auto r = process(tool("ffmpeg"), decode);
     if (r.code)
         fail("Video decode validation failed: " + QString::fromUtf8(r.error));
-    if (videoHasAlpha(source) && o.video != "av1" &&
-        alphaFingerprint(source, o, true, preview) != alphaFingerprint(destination, o, false, preview))
-        fail("Video transparency validation failed");
+    if (videoHasAlpha(source) && o.video != "av1")
+    {
+        if (sourceAlpha.isEmpty())
+            sourceAlpha = alphaFingerprint(source, o, true, preview);
+        if (sourceAlpha != alphaFingerprint(destination, o, false, preview))
+            fail("Video transparency validation failed");
+    }
 }
 
 static QString video(const QString &source, const QString &destination, const Options &o, Progress progress,
-                     bool preview = false, bool validate = true)
+                     QByteArray &sourceAlpha, bool preview = false, bool validate = true)
 {
     auto info = probe(source);
     double duration = info.value("format").toObject().value("duration").toString().toDouble();
@@ -1302,15 +1466,19 @@ static QString video(const QString &source, const QString &destination, const Op
         args << destination;
         progress(2, "Encoding video · " + encoder);
         auto r = process(tool("ffmpeg"), args, progress, duration);
-        if (r.code == 0 && transparent && !(o.videoLossless && o.video == "mkv") &&
-            alphaFingerprint(source, o, true, preview) != alphaFingerprint(destination, o, false, preview))
+        if (r.code == 0 && transparent && !(o.videoLossless && o.video == "mkv"))
         {
-            auto exactArgs = args;
-            exactArgs[exactArgs.indexOf("-lossless") + 1] = "1";
-            if (exactArgs.contains("-crf"))
-                exactArgs[exactArgs.indexOf("-crf") + 1] = "0";
-            progress(80, "Preserving exact transparency");
-            r = process(tool("ffmpeg"), exactArgs, progress, duration);
+            if (sourceAlpha.isEmpty())
+                sourceAlpha = alphaFingerprint(source, o, true, preview);
+            if (sourceAlpha != alphaFingerprint(destination, o, false, preview))
+            {
+                auto exactArgs = args;
+                exactArgs[exactArgs.indexOf("-lossless") + 1] = "1";
+                if (exactArgs.contains("-crf"))
+                    exactArgs[exactArgs.indexOf("-crf") + 1] = "0";
+                progress(80, "Preserving exact transparency");
+                r = process(tool("ffmpeg"), exactArgs, progress, duration);
+            }
         }
         if (r.code == 0)
         {
@@ -1322,7 +1490,7 @@ static QString video(const QString &source, const QString &destination, const Op
             fail(QString::fromUtf8(r.error));
     }
     if (validate)
-        validateVideo(source, destination, o, progress, preview);
+        validateVideo(source, destination, o, progress, preview, sourceAlpha);
     return used;
 }
 
@@ -1853,13 +2021,14 @@ QJsonObject Conversion::run(const QJsonObject &spec, Progress progress)
     else if (category == "video")
     {
         Options encoding = o;
+        QByteArray sourceAlpha;
         fitTarget(stage, o, false, progress, [&](int crf, Progress report) {
             encoding.crf = crf;
-            QString encoder = video(source, stage, encoding, report, preview, false);
+            QString encoder = video(source, stage, encoding, report, sourceAlpha, preview, false);
             if (encoder == "libsvtav1")
                 encoding.acceleration = "CPU";
         });
-        validateVideo(source, stage, encoding, progress, preview);
+        validateVideo(source, stage, encoding, progress, preview, sourceAlpha);
     }
     else
         pdf(source, stage, o, progress);
