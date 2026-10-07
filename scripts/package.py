@@ -94,7 +94,12 @@ if system == "Darwin":
     # an absolute install ID. Normalize those IDs before signing the bundle.
     for library in (app / "Contents/Frameworks").glob("*.dylib"):
         run("/usr/bin/install_name_tool", "-id", "@rpath/" + library.name, library)
+    # Executables under Resources/tools are not discovered by --deep. Sign
+    # these explicit code objects after install_name_tool rewrites their links.
+    for tool in tools:
+        run("/usr/bin/codesign", "--force", "--sign", "-", tool)
     run("/usr/bin/codesign", "--force", "--deep", "--sign", "-", app)
+    run("/usr/bin/codesign", "--verify", "--deep", "--strict", app)
     binary = app / "Contents/MacOS/Athanor"
     # macdeployqt also relocates the bundled tools' non-Qt dylibs.
     for path in [binary, *tools, *(app / "Contents/Frameworks").glob("*.dylib")]:
