@@ -45,7 +45,7 @@ def copy_tools(destination):
 
 
 def verify(binary):
-    env = dict(os.environ, ATHANOR_TEST="1", QT_QPA_PLATFORM="offscreen")
+    env = dict(os.environ, ATHANOR_TEST="1", QT_QPA_PLATFORM={"Darwin": "cocoa", "Windows": "windows", "Linux": "offscreen"}[system])
     # Remove developer search paths: launch and convert with the packaged codecs.
     env.pop("ATHANOR_TOOLS_DIR", None)
     env.pop("QT_PLUGIN_PATH", None)
@@ -123,6 +123,13 @@ elif system == "Linux":
         "--executable", app / "usr/bin/Athanor", *(arg for tool in tools for arg in ("--executable", tool)),
         "--desktop-file", repo / "packaging/io.github.SixFawn253.Athanor.desktop",
         "--icon-file", app / "usr/share/icons/hicolor/256x256/apps/io.github.SixFawn253.Athanor.png", "--plugin", "qt", env=env)
+    # linuxdeploy defaults to xcb. Also keep CLI/worker jobs usable on a
+    # headless machine with Qt's offscreen platform plugin.
+    qt_plugins = Path(subprocess.check_output([command("qmake", "qmake6"), "-query", "QT_INSTALL_PLUGINS"], text=True).strip())
+    xcb = next(app.rglob("libqxcb.so"))
+    offscreen = xcb.parent / "libqoffscreen.so"
+    shutil.copy2(qt_plugins / "platforms/libqoffscreen.so", offscreen)
+    run("patchelf", "--set-rpath", "$ORIGIN/" + os.path.relpath(app / "usr/lib", offscreen.parent), offscreen)
     sdk_licenses = repo / ".build/sdk/licenses"
     if sdk_licenses.exists():
         shutil.copytree(sdk_licenses, app / "usr/licenses/source-codecs", dirs_exist_ok=True)

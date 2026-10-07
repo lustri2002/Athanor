@@ -133,6 +133,13 @@ int main(int argc, char **argv)
         return UnixUpdate::apply(application.arguments());
     }
 #endif
+#ifdef Q_OS_LINUX
+    if (qEnvironmentVariableIsEmpty("DISPLAY") && qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY") &&
+        !qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+        for (int i = 1; i < argc; i++)
+            if (QByteArray(argv[i]) == "--cli" || QByteArray(argv[i]) == "--worker")
+                qputenv("QT_QPA_PLATFORM", "offscreen");
+#endif
     Application application(argc, argv);
     application.setApplicationName("Athanor");
     application.setApplicationVersion("1.1-alpha");
