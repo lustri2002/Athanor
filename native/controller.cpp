@@ -117,7 +117,11 @@ Controller::Controller(bool quick, QObject *parent) : QObject(parent), compact(q
 {
     revealDeadline.setSingleShot(true);
     connect(&revealDeadline, &QTimer::timeout, this, &Controller::transitionExpired);
-    settingsPath = QCoreApplication::applicationDirPath() + "/settings.json";
+    QString settingsDirectory = qEnvironmentVariable("ATHANOR_SETTINGS_DIR");
+    if (settingsDirectory.isEmpty())
+        settingsDirectory = QCoreApplication::applicationDirPath();
+    QDir().mkpath(settingsDirectory);
+    settingsPath = settingsDirectory + "/settings.json";
     QFile file(settingsPath);
     if (file.open(QIODevice::ReadOnly))
     {
@@ -156,7 +160,9 @@ Controller::Controller(bool quick, QObject *parent) : QObject(parent), compact(q
     if (!qEnvironmentVariableIsSet("ATHANOR_TEST"))
         QTimer::singleShot(400, this, [this] {
             QString error;
-            if (!Platform::contextMenu(contexts, QCoreApplication::applicationFilePath(), &error))
+            if (!Platform::contextMenu(
+                    contexts, qEnvironmentVariable("ATHANOR_LAUNCHER_PATH", QCoreApplication::applicationFilePath()),
+                    &error))
             {
                 message = error;
                 emit changed();
@@ -232,7 +238,8 @@ void Controller::setContextMenus(bool enabled)
 {
     QString error;
     if (qEnvironmentVariableIsSet("ATHANOR_TEST") ||
-        Platform::contextMenu(enabled, QCoreApplication::applicationFilePath(), &error))
+        Platform::contextMenu(
+            enabled, qEnvironmentVariable("ATHANOR_LAUNCHER_PATH", QCoreApplication::applicationFilePath()), &error))
     {
         contexts = enabled;
         save();
