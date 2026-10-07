@@ -61,6 +61,7 @@ class ChildProcess : public QObject
     std::atomic<int> processState{QProcess::NotRunning}, result{0};
     std::atomic<qint64> pid{0};
     std::atomic<bool> abnormal{false};
+    std::atomic<quint64> runGeneration{0};
     QMutex mutex;
     QWaitCondition available;
     QByteArray output, error;

@@ -42,6 +42,7 @@ static QString windowsError()
     return text;
 }
 #else
+#include <cerrno>
 #include <signal.h>
 #include <unistd.h>
 #endif
@@ -80,7 +81,25 @@ ChildProcess::~ChildProcess()
 }
 void ChildProcess::start()
 {
+    if (state() != QProcess::NotRunning)
+        return;
+    failure.clear();
 #ifdef Q_OS_WIN
+    if (monitor.joinable())
+        monitor.join();
+    if (jobHandle)
+        CloseHandle((HANDLE)jobHandle);
+    if (processHandle)
+        CloseHandle((HANDLE)processHandle);
+    jobHandle = processHandle = nullptr;
+    pid = result = 0;
+    abnormal = false;
+    const auto generation = ++runGeneration;
+    {
+        QMutexLocker guard(&mutex);
+        output.clear();
+        error.clear();
+    }
     HANDLE outRead = nullptr, outWrite = nullptr, errRead = nullptr, errWrite = nullptr;
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     auto closePipes = [&] {
@@ -140,9 +159,8 @@ void ChildProcess::start()
     }
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
-    emit started();
-    monitor = std::thread([this, outRead, errRead] {
-        auto reader = [this](HANDLE handle, bool errors) {
+    monitor = std::thread([this, outRead, errRead, generation] {
+        auto reader = [this, generation](HANDLE handle, bool errors) {
             char bytes[8192];
             DWORD count = 0;
             while (ReadFile(handle, bytes, sizeof(bytes), &count, nullptr) && count)
@@ -154,7 +172,9 @@ void ChildProcess::start()
                 }
                 QMetaObject::invokeMethod(
                     this,
-                    [this, errors] {
+                    [this, errors, generation] {
+                        if (generation != runGeneration)
+                            return;
                         if (errors)
                             emit readyReadStandardError();
                         else
@@ -177,13 +197,23 @@ void ChildProcess::start()
             QMutexLocker guard(&mutex);
             available.wakeAll();
         }
-        QMetaObject::invokeMethod(this, [this] { emit finished(result, exitStatus()); }, Qt::QueuedConnection);
+        const auto status = abnormal ? QProcess::CrashExit : QProcess::NormalExit;
+        QMetaObject::invokeMethod(this, [this, generation, code, status] {
+            if (generation == runGeneration)
+                emit finished(int(code), status);
+        }, Qt::QueuedConnection);
     });
+    emit started();
 #else
     process->setProgram(program);
     process->setArguments(arguments);
     if (workerGroup)
-        process->setChildProcessModifier([] { setsid(); });
+        process->setChildProcessModifier([child = process] {
+            if (setsid() == -1)
+                child->failChildProcessModifier("setsid", errno);
+        });
+    else
+        process->setChildProcessModifier({});
     process->start();
 #endif
 }
@@ -191,7 +221,7 @@ bool ChildProcess::waitForStarted(int timeout) const
 {
 #ifdef Q_OS_WIN
     Q_UNUSED(timeout);
-    return processHandle != nullptr;
+    return processState == QProcess::Running && processHandle != nullptr;
 #else
     return process->waitForStarted(timeout);
 #endif
@@ -284,14 +314,20 @@ qint64 ChildProcess::processId() const
 void ChildProcess::kill()
 {
 #ifdef Q_OS_WIN
+    if (processState == QProcess::NotRunning)
+        return;
     if (jobHandle)
         TerminateJobObject((HANDLE)jobHandle, 1);
     else if (processHandle)
         TerminateProcess((HANDLE)processHandle, 1);
 #else
-    if (workerGroup && processId() > 0)
-        ::kill(-pid_t(processId()), SIGKILL);
-    else
-        process->kill();
+    if (process->state() == QProcess::NotRunning)
+        return;
+    const auto childPid = process->processId();
+    // The PID exists during Starting, before the child has called setsid().
+    // Stop the root first so it cannot create descendants after the group kill.
+    process->kill();
+    if (workerGroup && childPid > 0)
+        ::kill(-pid_t(childPid), SIGKILL);
 #endif
 }

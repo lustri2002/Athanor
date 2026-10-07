@@ -5,6 +5,8 @@
 #include "platform.h"
 #include "ui_test.h"
 #include "unixupdate.h"
+#include "process_test.h"
+#include "inputselection.h"
 #include <QFileOpenEvent>
 #include <functional>
 #include <QApplication>
@@ -152,6 +154,8 @@ int main(int argc, char **argv)
         int i = args.indexOf("--worker");
         return i + 1 < args.size() ? Conversion::worker(args[i + 1]) : 1;
     }
+    if (args.size() == 3 && args[1] == "--process-test-helper" && qEnvironmentVariableIsSet("ATHANOR_TEST"))
+        return runProcessTestHelper(args[2]);
     QCommandLineParser parser;
     parser.setApplicationDescription("Athanor");
     parser.addHelpOption();
@@ -183,6 +187,9 @@ int main(int argc, char **argv)
     QCommandLineOption platformTest("platform-test");
     platformTest.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(platformTest);
+    QCommandLineOption processTest("process-test");
+    processTest.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(processTest);
     QCommandLineOption testOption("self-test", QString(), "folder");
     testOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(testOption);
@@ -198,7 +205,34 @@ int main(int argc, char **argv)
     QCommandLineOption updateTest("update-test", QString(), "folder");
     updateTest.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(updateTest);
+    QCommandLineOption readImageTest("read-image-test", QString(), "job");
+    readImageTest.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(readImageTest);
     parser.process(application);
+    if (parser.isSet("read-image-test") && qEnvironmentVariableIsSet("ATHANOR_TEST"))
+    {
+        QFile job(parser.value("read-image-test"));
+        if (!job.open(QIODevice::ReadOnly))
+            return 1;
+        const auto spec = QJsonDocument::fromJson(job.readAll()).object();
+        try
+        {
+            const auto image = Conversion::readImage(spec.value("source").toString(), spec.value("frame").toInt());
+            const bool ok = !image.isNull() && image.save(spec.value("output").toString(), "PNG");
+            Conversion::writeLine({{"ok", ok}, {"width", image.width()}, {"height", image.height()}});
+            return ok ? 0 : 1;
+        }
+        catch (const std::exception &error)
+        {
+            Conversion::writeLine({{"ok", false}, {"error", QString::fromUtf8(error.what())}});
+            return 1;
+        }
+    }
+    if (parser.isSet("process-test"))
+    {
+        qputenv("ATHANOR_TEST", "1");
+        return runProcessTest();
+    }
     if (parser.isSet("platform-test"))
     {
         extern int runPlatformTest();
@@ -236,21 +270,20 @@ int main(int argc, char **argv)
             opts.sizeMode = true;
             opts.targetBytes = qint64(std::round(mb * 1000000));
         }
-        QString target = parser.value("target");
-        if (QStringList{"avif", "webp", "heic", "heif", "jpg", "png", "ico"}.contains(target))
-            opts.image = target;
-        if (QStringList{"webm", "mkv", "av1", "mp4", "gif", "opus", "mp3", "wav"}.contains(target))
-            opts.video = target;
-        if (QStringList{"opus", "mp3", "wav"}.contains(target))
-            opts.audio = target;
+        if (!InputSelection::applyTarget(opts, parser.value("target")))
+        {
+            Conversion::writeLine({{"ok", false}, {"error", "Unsupported conversion target"}});
+            return 1;
+        }
+        const auto inputs = InputSelection::paths(parser.positionalArguments(), parser.isSet("include-subfolders"), false);
         QJsonArray pdfSources;
         if (opts.image == "pdf")
-            for (const auto &path : parser.positionalArguments())
+            for (const auto &path : inputs)
                 if (Conversion::kind(path) == "image")
                     pdfSources.append(QFileInfo(path).absoluteFilePath());
         bool pdfDone = false;
         int errors = 0;
-        for (const auto &input : parser.positionalArguments())
+        for (const auto &input : inputs)
         {
             if (opts.image == "pdf" && Conversion::kind(input) == "image")
             {
@@ -339,7 +372,28 @@ int main(int argc, char **argv)
                 Conversion::writeLine({{"ui_warning", error.toString()}});
         });
     engine.loadFromModule("Athanor", quick ? "Quick" : "Main");
-    if (parser.isSet("qml-check"))
+    const bool startupPending = UnixUpdate::startupPending();
+    if (startupPending)
+    {
+        auto window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        if (!window)
+            return 2;
+        // A constructed QML root cannot confirm that the renderer actually works.
+        // Keep the update backup until the first frame has been presented.
+        QObject::connect(window, &QQuickWindow::frameSwapped, &application, [&application, check = parser.isSet("qml-check")] {
+            if (!UnixUpdate::startupPending())
+                return;
+            const bool ready = UnixUpdate::acknowledgeStartup();
+            if (check || !ready)
+                application.exit(ready ? 0 : 2);
+        }, Qt::QueuedConnection);
+        window->update();
+        QTimer::singleShot(15000, &application, [] {
+            if (UnixUpdate::startupPending())
+                QCoreApplication::exit(2);
+        });
+    }
+    if (parser.isSet("qml-check") && !startupPending)
         return engine.rootObjects().isEmpty() ? 2 : 0;
     if (parser.isSet("self-test"))
         runUiTest(&engine, &controller, parser.value("self-test"), quick);

@@ -8,13 +8,87 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLockFile>
 #include <QNetworkReply>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QSaveFile>
 #include <QVersionNumber>
 #include <QUuid>
 #include <memory>
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <climits>
+#endif
+namespace
+{
+bool processAlive(qint64 pid)
+{
+    if (pid <= 0)
+        return true; // Invalid or unknown ownership must never authorize deletion.
+#ifdef Q_OS_WIN
+    if (pid > MAXDWORD)
+        return true;
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, DWORD(pid));
+    if (!process)
+        return GetLastError() != ERROR_INVALID_PARAMETER;
+    const bool alive = WaitForSingleObject(process, 0) != WAIT_OBJECT_0;
+    CloseHandle(process);
+    return alive;
+#else
+    if (pid > INT_MAX)
+        return true;
+    return ::kill(pid_t(pid), 0) == 0 || errno != ESRCH;
+#endif
+}
+bool writeOwners(const QString &archive, const QList<qint64> &pids, bool handoffPending = false)
+{
+    QJsonArray owners;
+    for (auto pid : pids)
+        owners.append(pid);
+    QSaveFile file(archive + ".owner.json");
+    const auto data = QJsonDocument(QJsonObject{{"pids", owners}, {"handoff_pending", handoffPending}}).toJson(QJsonDocument::Compact);
+    return file.open(QIODevice::WriteOnly) && file.write(data) == data.size() && file.commit();
+}
+void removeDownload(const QString &archive)
+{
+    QFile::remove(archive);
+    QFile::remove(archive + ".owner.json");
+}
+void cleanAbandonedDownloads(const QString &folder)
+{
+    QDir downloads(folder);
+    if (!downloads.exists())
+        return;
+    QLockFile lock(downloads.filePath("cleanup.lock"));
+    if (!lock.tryLock(0))
+        return;
+    for (const auto &name : downloads.entryList({"update-*.owner.json"}, QDir::Files))
+    {
+        if (!QRegularExpression("^update-[0-9a-f]{32}\\.(?:exe|zip|tar\\.gz)\\.owner\\.json$").match(name).hasMatch())
+            continue;
+        QFile file(downloads.filePath(name));
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+        QJsonParseError error;
+        const auto manifest = QJsonDocument::fromJson(file.readAll(), &error).object();
+        const auto owners = manifest.value("pids").toArray();
+        if (error.error || owners.isEmpty() || manifest.value("handoff_pending").toBool())
+            continue;
+        bool active = false;
+        for (auto owner : owners)
+            active |= !owner.isDouble() || processAlive(owner.toInteger());
+        file.close();
+        if (!active)
+            removeDownload(downloads.filePath(name.chopped(QString(".owner.json").size())));
+    }
+}
+}
 static const QString releaseApi = "https://api.github.com/repos/SixFawn253/Athanor/releases/latest";
 static bool trustedAsset(const QUrl &url)
 {
@@ -35,10 +109,7 @@ Updater::Updater(QObject *owner) : QObject(owner), controller(owner)
     auto folder = Platform::settingsDirectory();
     preferences = folder + "/updates.ini";
     QDir().mkpath(folder);
-    QDir downloads(folder + "/updates");
-    for (const auto &name : downloads.entryList({"update-*"}, QDir::Files))
-        if (QRegularExpression("^update-[0-9a-f]{32}\\.(?:exe|zip|tar\\.gz)$").match(name).hasMatch())
-            QFile::remove(downloads.filePath(name));
+    cleanAbandonedDownloads(folder + "/updates");
     autoCheck = QSettings(preferences, QSettings::IniFormat).value("automatic", true).toBool();
     message = "Athanor " + QCoreApplication::applicationVersion();
     QFile updateError(folder + "/update-error.txt");
@@ -160,12 +231,16 @@ void Updater::install()
     const auto suffix = Platform::releaseAsset("0").endsWith(".tar.gz") ? ".tar.gz"
                         : Platform::releaseAsset("0").endsWith(".zip") ? ".zip" : ".exe";
     auto file = std::make_shared<QFile>(folder + "/update-" + QUuid::createUuid().toString(QUuid::Id128) + suffix);
-    if (!file->open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    QLockFile lock(folder + "/cleanup.lock");
+    if (!lock.tryLock(1000) || !writeOwners(file->fileName(), {QCoreApplication::applicationPid()}) ||
+        !file->open(QIODevice::WriteOnly | QIODevice::NewOnly))
     {
+        removeDownload(file->fileName());
         message = "Cannot save the update. Check free disk space.";
         emit changed();
         return;
     }
+    lock.unlock();
     pending = true;
     percent = 0;
     message = "Downloading " + version + "…";
@@ -203,15 +278,25 @@ void Updater::install()
         reply->deleteLater();
         if (!valid)
         {
-            file->remove();
+            removeDownload(file->fileName());
             message = "The update could not be verified. Your current app is unchanged.";
             emit changed();
             return;
         }
         if (controller->property("busy").toBool() || controller->property("previewBusy").toBool())
         {
-            file->remove();
+            removeDownload(file->fileName());
             message = "Finish the current job, then download the update again.";
+            emit changed();
+            return;
+        }
+        qint64 helperPid = 0;
+        // If recording the helper later fails, retain this conservative marker
+        // even after the parent exits; a pending transfer is never garbage.
+        if (!writeOwners(file->fileName(), {QCoreApplication::applicationPid()}, true))
+        {
+            removeDownload(file->fileName());
+            message = "Could not prepare the update helper. Try again later.";
             emit changed();
             return;
         }
@@ -219,9 +304,9 @@ void Updater::install()
         QString launcher = qEnvironmentVariable("ATHANOR_LAUNCHER_PATH");
         QStringList args{"--apply-update", launcher, QString::number(QCoreApplication::applicationPid()),
                          qEnvironmentVariable("ATHANOR_LAUNCHER_PID", "0"), digest};
-        if (!QProcess::startDetached(file->fileName(), args, QFileInfo(launcher).absolutePath()))
+        if (!QProcess::startDetached(file->fileName(), args, QFileInfo(launcher).absolutePath(), &helperPid))
         {
-            file->remove();
+            removeDownload(file->fileName());
             message = "Couldn’t start the update. Your current app is unchanged.";
             emit changed();
             return;
@@ -229,14 +314,24 @@ void Updater::install()
 #else
         QStringList args{"--apply-update", file->fileName(), Platform::installRoot(),
                          QString::number(QCoreApplication::applicationPid()), digest};
-        if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args))
+        if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args, QString(), &helperPid))
         {
-            file->remove();
+            removeDownload(file->fileName());
             message = "Could not start the update helper.";
             emit changed();
             return;
         }
 #endif
+        // The parent stays alive until the helper is recorded, so another
+        // instance always sees at least one live owner during the handoff.
+        if (!writeOwners(file->fileName(), {QCoreApplication::applicationPid(), helperPid}))
+        {
+            // Retain the parent's lease. The helper will time out waiting for
+            // this instance to close and leave the current installation intact.
+            message = "Could not transfer the update download to its helper. Try again later.";
+            emit changed();
+            return;
+        }
         message = "Restarting Athanor…";
         emit changed();
         QCoreApplication::quit();

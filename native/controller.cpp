@@ -1,4 +1,5 @@
 #include "controller.h"
+#include "inputselection.h"
 #include "platform.h"
 #include <QCoreApplication>
 #include <QFileDialog>
@@ -283,19 +284,7 @@ void Controller::setOption(const QString &key, const QVariant &value)
 }
 void Controller::setTarget(const QString &target)
 {
-    if (QStringList{"avif", "webp", "heic", "heif", "jpg", "png", "ico"}.contains(target))
-        opts.image = target;
-    else if (QStringList{"webm", "mkv", "av1", "mp4", "gif"}.contains(target))
-        opts.video = target;
-    else if (QStringList{"opus", "mp3", "wav"}.contains(target))
-    {
-        opts.audio = target;
-        opts.video = target;
-    }
-    else if (target == "images-pdf")
-        opts.image = "pdf";
-    else if (target == "pdf-jpg")
-        opts.pdfOutput = "jpg";
+    InputSelection::applyTarget(opts, target);
     emit changed();
 }
 void Controller::addFiles()
@@ -352,20 +341,7 @@ void Controller::addPaths(const QStringList &paths, bool recursive)
     });
     watcher->setFuture(QtConcurrent::run([paths, recursive] {
         QVector<QueueItem> rows;
-        QStringList candidates;
-        for (const auto &path : paths)
-        {
-            QFileInfo info(path);
-            if (info.isDir())
-            {
-                QDirIterator it(path, QDir::Files | QDir::NoDotAndDotDot,
-                                recursive ? QDirIterator::Subdirectories : QDirIterator::NoIteratorFlags);
-                while (it.hasNext())
-                    candidates << it.next();
-            }
-            else
-                candidates << info.absoluteFilePath();
-        }
+        const auto candidates = InputSelection::paths(paths, recursive);
         for (const auto &path : candidates)
         {
             QString category = Conversion::kind(path);
@@ -532,6 +508,17 @@ void Controller::schedule()
 void Controller::launch(int row)
 {
     auto *process = new ChildProcess(this);
+    const QVector<int> group = pdfGroups.value(row, {row});
+    auto failWorkspace = [this, process, group](const QString &warning) {
+        for (int index : group)
+        {
+            model.items[index].status = "Error";
+            model.items[index].warning = warning;
+            model.update(index);
+            failures++;
+        }
+        process->deleteLater();
+    };
     QString destinationRoot = opts.output.isEmpty() ? QFileInfo(model.items[row].source).absolutePath()
                                                     : QFileInfo(opts.output).absoluteFilePath();
     QDir().mkpath(destinationRoot);
@@ -540,18 +527,13 @@ void Controller::launch(int row)
     QFile file(job);
     if (!directory->isValid() || !file.open(QIODevice::WriteOnly))
     {
-        model.items[row].status = "Error";
-        model.items[row].warning = "Cannot create conversion workspace";
-        model.update(row);
-        process->deleteLater();
-        failures++;
+        failWorkspace("Cannot create conversion workspace");
         return;
     }
     QString input = rowInput(model.items[row]);
     Options jobOptions = opts;
     if (input != model.items[row].source)
         jobOptions.deleteOriginal = false;
-    QVector<int> group = pdfGroups.value(row, {row});
     QJsonArray sources;
     for (int index : group)
     {
@@ -568,13 +550,21 @@ void Controller::launch(int row)
                      {"options", jobOptions.json()},
                      {"scratch", directory->path()},
                      {"stem", QFileInfo(model.items[row].source).completeBaseName()}};
-    file.write(QJsonDocument(spec).toJson());
+    const auto jobBytes = QJsonDocument(spec).toJson();
+    if (file.write(jobBytes) != jobBytes.size() || !file.flush())
+    {
+        failWorkspace("Cannot write conversion job");
+        return;
+    }
     file.close();
     Platform::setupProcess(process, true);
     processes.append(process);
     active++;
-    model.items[row].status = "Starting";
-    model.update(row);
+    for (int index : group)
+    {
+        model.items[index].status = "Starting";
+        model.update(index);
+    }
     const QString requestedKey = conversionKey(model.items[row], opts);
     auto pending = std::make_shared<QByteArray>();
     auto final = std::make_shared<QJsonObject>();
