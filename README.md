@@ -120,6 +120,11 @@ elevation is attempted.
 
 ## Validation
 
+`VERSION` is the version source. CMake generates the application version and
+`athanor-version.json`; packaging uses that configured metadata, including the
+Windows portable launcher. The current `1.1.0` retains the existing `1.1-alpha`
+application version and `Athanor-Alpha-1.1-*` release filenames.
+
 CI compiles the same target on Windows x64, Linux x64, macOS arm64 and macOS x64.
 Generated fixtures cover every output format, animation and alpha preservation,
 lossless modes, PDF structure and page export, target-size modes, Unicode paths,
@@ -138,6 +143,16 @@ and the existing Auto-to-CPU fallback.
 `ATHANOR_TEST=1` prevents tests from installing real user integrations or making
 automatic GitHub requests. Platform tests put file manager actions in temporary
 folders. No private images or external fixture folders are required.
+
+The regression suite also covers immediate worker cancellation with deletion
+enabled, process trees and reuse, grouped PDF failures/cancellation, CLI action
+aliases and recursive folders, rotated video, audio stream duration, APNG bit
+depth, repeated animation frames, selective previews and streamed alpha checks.
+An in-flight download test starts a second instance and checks that the active
+archive survives. Unix update tests load QML before replacement and retain the
+backup until the new app presents its first frame; premature exit or missing
+readiness triggers rollback. Startup confirmation is limited to 20 seconds
+(15 seconds after QML load), so a slower startup is restored to the previous app.
 
 ## Dependencies and licenses
 

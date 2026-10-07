@@ -7,6 +7,7 @@
 #include "unixupdate.h"
 #include "process_test.h"
 #include "inputselection.h"
+#include "version.h"
 #include <QFileOpenEvent>
 #include <functional>
 #include <QApplication>
@@ -144,7 +145,7 @@ int main(int argc, char **argv)
 #endif
     Application application(argc, argv);
     application.setApplicationName("Athanor");
-    application.setApplicationVersion("1.1-alpha");
+    application.setApplicationVersion(ATHANOR_APPLICATION_VERSION);
     application.setQuitOnLastWindowClosed(true);
     QImageReader::setAllocationLimit(0);
     QQuickStyle::setStyle("Basic");

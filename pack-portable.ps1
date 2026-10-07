@@ -4,8 +4,23 @@ param(
     [string] $SevenZip = 'C:/Program Files/7-Zip'
 )
 $ErrorActionPreference = 'Stop'
-if (!$Output) { $Output = Join-Path $PSScriptRoot '../outputs/Athanor-Alpha-1.1-Windows-x64.exe' }
 $runtimePath = (Resolve-Path -LiteralPath $Runtime).Path
+$metadataFile = Join-Path $runtimePath 'athanor-version.json'
+if (!(Test-Path -LiteralPath $metadataFile)) {
+    throw 'Runtime version metadata is missing. Rebuild and install Athanor before packaging.'
+}
+$metadata = Get-Content -LiteralPath $metadataFile -Raw | ConvertFrom-Json
+if ($metadata.version -notmatch '^\d+\.\d+\.\d+$' -or $metadata.platform -ne 'Windows' -or
+    $metadata.architecture -notin @('x64', 'arm64', 'x86')) {
+    throw 'Runtime version metadata does not describe a supported Windows build.'
+}
+$releaseVersion = $metadata.version -replace '\.0$', ''
+$assetBasename = "Athanor-Alpha-$releaseVersion-Windows-$($metadata.architecture)"
+if ($metadata.release_version -ne $releaseVersion -or $metadata.application_version -ne "$releaseVersion-alpha" -or
+    $metadata.asset_basename -ne $assetBasename) {
+    throw 'Runtime version metadata is inconsistent.'
+}
+if (!$Output) { $Output = Join-Path $PSScriptRoot "../outputs/$assetBasename.exe" }
 $outputPath = [IO.Path]::GetFullPath($Output)
 $outputFolder = [IO.Path]::GetDirectoryName($outputPath)
 New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null

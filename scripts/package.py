@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -14,8 +15,21 @@ build = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 system = platform.system()
-arch = {"x86_64": "x64", "AMD64": "x64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
-version = "1.1"  # Existing release asset naming contract, not a new app version.
+metadata_path = build / "athanor-version.json"
+if not metadata_path.is_file():
+    raise RuntimeError("Build version metadata is missing. Configure and build Athanor before packaging.")
+metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+if not re.fullmatch(r"\d+\.\d+\.\d+", metadata.get("version", "")):
+    raise RuntimeError("Invalid build version metadata")
+version = metadata["release_version"]
+arch = metadata["architecture"]
+target_platform = {"Darwin": "macOS", "Windows": "Windows", "Linux": "Linux"}[system]
+asset_basename = f"Athanor-Alpha-{version}-{target_platform}-{arch}"
+if (version != metadata["version"].removesuffix(".0") or
+        metadata["application_version"] != version + "-alpha" or
+        metadata["platform"] != target_platform or arch not in {"x64", "arm64", "x86"} or
+        metadata["asset_basename"] != asset_basename):
+    raise RuntimeError("Build version metadata does not match this platform or release naming contract")
 
 
 def run(*args, **kwargs):
@@ -64,9 +78,18 @@ def verify(binary, app):
         for name in ("DISPLAY", "WAYLAND_DISPLAY", "QT_QPA_PLATFORM"):
             headless.pop(name, None)
         run(binary, "--cli", env=headless)
+    installed_metadata = (app / "Contents/Resources/athanor-version.json" if system == "Darwin" else
+                          app / "usr/share/athanor/athanor-version.json" if system == "Linux" else
+                          app / "athanor-version.json")
+    run(sys.executable, repo / "tests/version.py", binary, metadata_path, installed_metadata, env=env)
     run(binary, "--qml-check", env=env)
     run(binary, "--quick", "--qml-check", env=env)
     run(sys.executable, repo / "tests/smoke.py", binary, env=env)
+    run(sys.executable, repo / "tests/media_regressions.py", binary, env=env)
+    run(sys.executable, repo / "tests/preview_regressions.py", binary, env=env)
+    run(binary, "--process-test", env=env)
+    run(sys.executable, repo / "tests/cli.py", binary, env=env)
+    run(sys.executable, repo / "tests/update_download.py", binary, app, env=env)
     run(sys.executable, repo / "tests/ui.py", binary, output / "ui-packaged", env=env)
     run(sys.executable, repo / "tests/updater.py", binary, app, env=env)
 
@@ -120,7 +143,7 @@ if system == "Darwin":
         links = subprocess.check_output(["otool", "-L", str(path)], text=True)
         assert "/opt/homebrew/" not in links and "/usr/local/" not in links, links
     verify(binary, app)
-    archive = output / f"Athanor-Alpha-{version}-macOS-{arch}.zip"
+    archive = output / (asset_basename + ".zip")
     run("/usr/bin/ditto", "-c", "-k", "--keepParent", app, archive)
 elif system == "Linux":
     app = output / "Athanor"
@@ -153,7 +176,7 @@ elif system == "Linux":
         shutil.copytree(sdk_licenses, app / "usr/licenses/source-codecs", dirs_exist_ok=True)
     shutil.copytree("/usr/share/doc", app / "usr/licenses/system", ignore=lambda directory, names: [name for name in names if name != "copyright" and not (Path(directory) / name).is_dir()])
     verify(app / "usr/bin/Athanor", app)
-    run("tar", "-czf", output / f"Athanor-Alpha-{version}-Linux-{arch}.tar.gz", "-C", output, "Athanor")
+    run("tar", "-czf", output / (asset_basename + ".tar.gz"), "-C", output, "Athanor")
 else:
     app = output / "Athanor"
     if app.exists():
@@ -188,5 +211,5 @@ else:
     if (prefix / "share/licenses").exists():
         shutil.copytree(prefix / "share/licenses", app / "licenses/msys2", dirs_exist_ok=True)
     verify(app / "Athanor.exe", app)
-    shutil.make_archive(str(output / f"Athanor-Alpha-{version}-Windows-{arch}"), "zip", output, "Athanor")
+    shutil.make_archive(str(output / asset_basename), "zip", output, "Athanor")
 print("Verified distributions:", output, flush=True)
