@@ -48,7 +48,7 @@ cmake -S . -B .build/native -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="/path/to/Qt/6.8.3/gcc_64;$PWD/.build/sdk"
 cmake --build .build/native -j2
 ctest --test-dir .build/native --output-on-failure
-xvfb-run -a python3 tests/ui.py .build/native/native/Athanor .build/ui
+xvfb-run -a sh -c 'openbox >/tmp/athanor-openbox.log 2>&1 & exec python3 tests/ui.py .build/native/native/Athanor .build/ui'
 python3 scripts/package.py .build/native .build/packages
 ```
 
@@ -58,6 +58,9 @@ dependencies. Extract `Athanor` and run `Athanor/usr/bin/Athanor`. It contains a
 also work, use system conversion tools and leave upgrades to the package manager.
 The CI baseline is Ubuntu 24.04 x64; Linux distributions with an older glibc
 must build from source on their own baseline.
+For headless UI tests, install Xvfb and Openbox so window-scoped keyboard
+shortcuts are exercised in an active desktop window. On a normal desktop,
+run `tests/ui.py` directly.
 
 ### Windows
 
@@ -134,4 +137,5 @@ See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Keep the corresponding
 dependency sources, build configuration and license notices with public release
 artifacts. The original managed Windows SDK can continue to use its documented
 codec versions. Native package managers may supply newer compatible versions;
-the generated package metadata records what was actually bundled.
+the macOS package includes the Homebrew dependency environment and formula
+provenance, and packages retain dependency license notices.

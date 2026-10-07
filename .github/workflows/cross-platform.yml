@@ -45,7 +45,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: codec-cache
         with:
           path: |
             .build/codecs
@@ -54,9 +55,16 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config libaom-dev libdav1d-dev libde265-dev libx265-dev libwebp-dev libpng-dev libjpeg-dev ffmpeg libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 xvfb patchelf
+          sudo apt-get install -y ninja-build pkg-config libaom-dev libdav1d-dev libde265-dev libx265-dev libwebp-dev libpng-dev libjpeg-dev ffmpeg libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 xvfb openbox patchelf
           bash scripts/build-linux-codecs.sh
           echo "$PWD/.build/sdk/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache/save@v4
+        if: steps.codec-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            .build/codecs
+            .build/sdk
+          key: ${{ steps.codec-cache.outputs.cache-primary-key }}
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
@@ -69,7 +77,9 @@ jobs:
       - name: Platform and conversion tests
         run: ctest --test-dir .build/native --output-on-failure
       - name: UI regression captures
-        run: xvfb-run -a python3 tests/ui.py .build/native/native/Athanor .build/ui
+        # Window-scoped shortcuts need an active window. Xvfb alone supplies
+        # an X server, but no window manager to activate windows/popups.
+        run: xvfb-run -a sh -c 'openbox >/tmp/athanor-openbox.log 2>&1 & exec python3 tests/ui.py .build/native/native/Athanor .build/ui'
       - name: Bundle and verify the installed app
         run: python3 scripts/package.py .build/native .build/packages
       - uses: actions/upload-artifact@v4

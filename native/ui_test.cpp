@@ -50,6 +50,8 @@ void runUiTest(QQmlApplicationEngine *engine, Controller *controller, const QStr
     controller->setAppearance("Dark");
     controller->setMotion("Full");
     controller->setOption("mode", "quality");
+    window->raise();
+    window->requestActivate();
     if (compact && qgetenv("ATHANOR_UI_CATEGORY") == "pdf")
         controller->setOption("pdf_output", "jpg");
     QDir().mkpath(folder);
@@ -119,6 +121,8 @@ void runUiTest(QQmlApplicationEngine *engine, Controller *controller, const QStr
         switch (step)
         {
         case 0:
+            if (!window->isActive())
+                *error += "UI test window is not active; run with a desktop/window manager\n";
             capture(compact ? "quick-dark" : "convert-dark");
             (*result)["queue_count"] = controller->count();
             if (compact)
