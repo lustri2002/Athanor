@@ -1,4 +1,5 @@
 #include "updater.h"
+#include "platform.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -30,7 +31,7 @@ static QNetworkRequest request(const QUrl &url)
 }
 Updater::Updater(QObject *owner) : QObject(owner), controller(owner)
 {
-    auto folder = qEnvironmentVariable("ATHANOR_SETTINGS_DIR", QCoreApplication::applicationDirPath());
+    auto folder = qEnvironmentVariable("ATHANOR_SETTINGS_DIR", Platform::dataDir());
     preferences = folder + "/updates.ini";
     QDir downloads(folder + "/updates");
     for (const auto &name : downloads.entryList({"update-*.exe"}, QDir::Files))

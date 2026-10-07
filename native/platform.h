@@ -11,5 +11,7 @@ bool contextMenu(bool, const QString &, QString *);
 void notify(const QString &, const QString &);
 bool systemDark();
 bool animationsEnabled();
+QString resourceDir();
+QString dataDir();
 void print(const QByteArray &);
 } // namespace Platform
