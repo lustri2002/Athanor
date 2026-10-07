@@ -50,6 +50,14 @@ bool noLinks(const QString &path)
         info.setFile(parent);
     }
 }
+bool executablePermissions(const QString &path)
+{
+    const auto required = QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner;
+    const auto stored = QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner |
+                        QFile::ReadGroup | QFile::WriteGroup | QFile::ExeGroup |
+                        QFile::ReadOther | QFile::WriteOther | QFile::ExeOther;
+    return (QFile::permissions(path) & stored) == required || QFile::setPermissions(path, required);
+}
 bool ownedWrite(const QString &path, const QByteArray &bytes, bool enabled, bool executable = false)
 {
     if (!noLinks(path))
@@ -57,11 +65,16 @@ bool ownedWrite(const QString &path, const QByteArray &bytes, bool enabled, bool
     QFile existing(path);
     if (existing.exists())
     {
-        if (!existing.open(QIODevice::ReadOnly) || !existing.readAll().contains(marker))
+        if (!existing.open(QIODevice::ReadOnly))
+            return false;
+        const auto current = existing.readAll();
+        if (!current.contains(marker))
             return false;
         existing.close();
         if (!enabled)
             return existing.remove();
+        if (current == bytes)
+            return !executable || executablePermissions(path);
     }
     if (!enabled)
         return true;
@@ -70,7 +83,7 @@ bool ownedWrite(const QString &path, const QByteArray &bytes, bool enabled, bool
     QSaveFile output(path);
     if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit())
         return false;
-    return !executable || QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    return !executable || executablePermissions(path);
 }
 QString shellQuote(QString value)
 {
@@ -103,7 +116,10 @@ QString script(const QString &executable, const Group &group, const QString &tar
 }
 QString workflow(const QString &command, const QString &type)
 {
-    const auto uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    static const auto finderNamespace = QUuid::createUuidV5(QUuid("{6ba7b811-9dad-11d1-80b4-00c04fd430c8}"),
+                                                           QByteArrayLiteral("io.github.SixFawn253.Athanor/Finder"));
+    const auto uuid = QUuid::createUuidV5(finderNamespace, command.toUtf8() + '\0' + type.toUtf8())
+                          .toString(QUuid::WithoutBraces);
     // Finder Quick Actions use the system Run Shell Script action; inputMethod=1
     // passes each selected path as an argument, preserving spaces and Unicode.
     return QString::fromUtf8(R"XML(<?xml version="1.0" encoding="UTF-8"?>
