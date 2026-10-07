@@ -132,19 +132,18 @@ elif system == "Linux":
         if not target.exists():
             urllib.request.urlretrieve(f"https://github.com/linuxdeploy/{name}/releases/download/continuous/{target.name}", target)
             target.chmod(0o755)
+    qt_plugins = Path(subprocess.check_output([command("qmake", "qmake6"), "-query", "QT_INSTALL_PLUGINS"], text=True).strip())
+    platform_plugins = ["libqoffscreen.so", *(path.name for path in (qt_plugins / "platforms").glob("libqwayland*.so"))]
     env = dict(os.environ, APPIMAGE_EXTRACT_AND_RUN="1", QML_SOURCES_PATHS=str(repo / "native"),
-               QMAKE=command("qmake", "qmake6"), PATH=str(cache) + os.pathsep + os.environ["PATH"])
+               QMAKE=command("qmake", "qmake6"), PATH=str(cache) + os.pathsep + os.environ["PATH"],
+               LD_LIBRARY_PATH=str(repo / ".build/sdk/lib") + os.pathsep + os.environ.get("LD_LIBRARY_PATH", ""),
+               EXTRA_PLATFORM_PLUGINS=";".join(platform_plugins))
+    # CMake removes build RPATHs when installing. Expose the source-built SDK
+    # while linuxdeploy collects it; verification below clears this search path.
     run(cache / ("linuxdeploy-" + platform.machine() + ".AppImage"), "--appdir", app,
         "--executable", app / "usr/bin/Athanor", *(arg for tool in tools for arg in ("--executable", tool)),
         "--desktop-file", repo / "packaging/io.github.SixFawn253.Athanor.desktop",
         "--icon-file", app / "usr/share/icons/hicolor/256x256/apps/io.github.SixFawn253.Athanor.png", "--plugin", "qt", env=env)
-    # linuxdeploy defaults to xcb. Also keep CLI/worker jobs usable on a
-    # headless machine with Qt's offscreen platform plugin.
-    qt_plugins = Path(subprocess.check_output([command("qmake", "qmake6"), "-query", "QT_INSTALL_PLUGINS"], text=True).strip())
-    xcb = next(app.rglob("libqxcb.so"))
-    offscreen = xcb.parent / "libqoffscreen.so"
-    shutil.copy2(qt_plugins / "platforms/libqoffscreen.so", offscreen)
-    run("patchelf", "--set-rpath", "$ORIGIN/" + os.path.relpath(app / "usr/lib", offscreen.parent), offscreen)
     sdk_licenses = repo / ".build/sdk/licenses"
     if sdk_licenses.exists():
         shutil.copytree(sdk_licenses, app / "usr/licenses/source-codecs", dirs_exist_ok=True)
