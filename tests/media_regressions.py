@@ -188,6 +188,22 @@ def main():
         assert hashlib.sha256(pcm(short_audio)).digest() == hashlib.sha256(pcm(result["output"])).digest()
         print("Audio duration and independent selected-stream PCM hash", flush=True)
 
+        # Live Matroska omits explicit track duration tags. FFprobe may report a
+        # container estimate for every stream, which is not the mapped audio's length.
+        untagged = root / "audio-without-track-duration.mkv"
+        command(ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+                "testsrc2=size=64x64:rate=10:duration=2", "-f", "lavfi", "-i",
+                "sine=frequency=440:duration=1", "-c:v", "ffv1", "-c:a", "pcm_s16le", "-live", "1", untagged)
+        track = next(s for s in probe(ffprobe, untagged)["streams"] if s["codec_type"] == "audio")
+        assert not any(key.upper() == "DURATION" for key in track.get("tags", {})), track
+        result = convert(binary, root, untagged, "--video", "opus", "--target-size", "0.015")
+        output = Path(result["output"])
+        assert output.stat().st_size <= 15000
+        assert abs(float(probe(ffprobe, output)["streams"][0]["duration"]) - 1) < .1
+        result = convert(binary, root, untagged, "--video", "wav")
+        assert hashlib.sha256(pcm(untagged)).digest() == hashlib.sha256(pcm(result["output"])).digest()
+        print("Untagged audio: packet duration, target size and PCM hash", flush=True)
+
         for index, (phases, durations, loop) in enumerate([
                 ((0, 0, 31), (250, 375, 500), 3),
                 ((0, 0), (250, 375), 1),

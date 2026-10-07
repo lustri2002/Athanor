@@ -1524,8 +1524,69 @@ static double streamDuration(const QJsonObject &stream)
         }
     return 0;
 }
+static double audioDuration(const QString &path, const QJsonObject &stream, const QJsonObject &info)
+{
+    // FFprobe can fill every Matroska stream's duration from a container-wide
+    // bitrate estimate. Only an explicit track DURATION tag is authoritative.
+    const bool matroska = info.value("format").toObject().value("format_name").toString().contains("matroska");
+    const double known = streamDuration(matroska ? QJsonObject{{"tags", stream.value("tags")}} : stream);
+    if (std::isfinite(known) && known > 0)
+        return known;
+    // Some containers omit per-stream duration and DURATION tags. Inspect only
+    // the mapped audio packets, rather than borrowing the longer video duration.
+    QByteArray pending;
+    double first = 0, last = 0;
+    bool found = false;
+    auto packet = [&](const QByteArray &line) {
+        double timestamp = 0, duration = 0;
+        bool hasPts = false, hasTimestamp = false;
+        for (const auto &field : line.split('|'))
+        {
+            const auto separator = field.indexOf('=');
+            if (separator < 0)
+                continue;
+            bool valid = false;
+            const auto value = field.mid(separator + 1).toDouble(&valid);
+            if (!valid || !std::isfinite(value))
+                continue;
+            const auto key = field.left(separator);
+            if (key == "pts_time" || (key == "dts_time" && !hasPts))
+            {
+                timestamp = value;
+                hasTimestamp = true;
+                hasPts |= key == "pts_time";
+            }
+            else if (key == "duration_time")
+                duration = qMax(0.0, value);
+        }
+        if (!hasTimestamp)
+            return;
+        if (!found)
+            first = timestamp, last = timestamp + duration;
+        else
+            first = qMin(first, timestamp), last = qMax(last, timestamp + duration);
+        found = true;
+    };
+    auto result = process(tool("ffprobe"), {"-v", "error", "-select_streams", "a:0", "-show_packets",
+                         "-show_entries", "packet=pts_time,dts_time,duration_time", "-of", "compact=p=0", path},
+                         {}, 0, [&](const QByteArray &bytes) {
+        pending += bytes;
+        int newline = 0;
+        while ((newline = pending.indexOf('\n')) >= 0)
+        {
+            packet(pending.left(newline));
+            pending.remove(0, newline + 1);
+        }
+        if (pending.size() > 65536)
+            fail("Invalid audio packet timestamps");
+    });
+    packet(pending);
+    if (result.code || !found || last <= first)
+        fail("Cannot determine audio stream duration");
+    return last - first;
+}
 static void validateMedia(const QString &source, const QString &destination, bool audioOnly, bool silent,
-                          Progress progress)
+                          Progress progress, double inputAudioDuration = 0)
 {
     auto in = probe(source), out = probe(destination);
     QJsonObject inStream, outStream;
@@ -1548,8 +1609,8 @@ static void validateMedia(const QString &source, const QString &destination, boo
         if (displayedVideoSize(outStream) != expectedSize)
             fail("Video output dimensions changed unexpectedly");
     }
-    double before = audioOnly ? streamDuration(inStream) : mediaDuration(in);
-    double after = audioOnly ? streamDuration(outStream) : mediaDuration(out);
+    double before = audioOnly ? (inputAudioDuration > 0 ? inputAudioDuration : audioDuration(source, inStream, in)) : mediaDuration(in);
+    double after = audioOnly ? audioDuration(destination, outStream, out) : mediaDuration(out);
     if (before > 0 && after > 0 && std::abs(before - after) > qMax(0.3, before * 0.02))
         fail("Media output duration changed unexpectedly");
     if (!audioOnly && !silent)
@@ -1578,7 +1639,7 @@ static void audio(const QString &source, const QString &destination, const Optio
         if (v.toObject().value("codec_type") == "audio" && !hasAudio)
         {
             hasAudio = true;
-            duration = streamDuration(v.toObject());
+            duration = audioDuration(source, v.toObject(), info);
         }
     if (!hasAudio)
         fail("This file has no audio track to extract");
@@ -1638,7 +1699,7 @@ static void audio(const QString &source, const QString &destination, const Optio
             encode(rate, progress);
         }
     }
-    validateMedia(source, destination, true, true, progress);
+    validateMedia(source, destination, true, true, progress, duration);
 }
 static void compatibleVideo(const QString &source, const QString &destination, const Options &o, Progress progress,
                             bool preview)

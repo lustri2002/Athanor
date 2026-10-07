@@ -46,8 +46,9 @@ with tempfile.TemporaryDirectory(prefix="athanor-download-") as folder:
         shutil.copy2(binary, app / relative)
     if system == "Linux":
         (app / ".athanor-portable").write_text("portable\n")
+    qpa = {"Darwin": "cocoa", "Windows": "windows", "Linux": "xcb"}[system] if package_root else "offscreen"
     env = dict(os.environ, ATHANOR_TEST="1", ATHANOR_SETTINGS_DIR=str(root / "settings"),
-               QT_QPA_PLATFORM="offscreen", ATHANOR_LAUNCHER_PATH=str(root / "launcher.exe"))
+               QT_QPA_PLATFORM=qpa, ATHANOR_LAUNCHER_PATH=str(root / "launcher.exe"))
     release = root / "release.json"
     env["ATHANOR_TEST_UPDATE_API"] = release.as_uri()
     name = f"Athanor-Alpha-9.9-{os_name}-{arch}{suffix}"
