@@ -38,7 +38,8 @@ jobs:
         with:
           name: macOS-${{ matrix.runner }}
           path: |
-            .build/packages/*
+            .build/packages/*.zip
+            .build/packages/ui-packaged
             .build/ui
   linux:
     runs-on: ubuntu-24.04
@@ -87,7 +88,8 @@ jobs:
         with:
           name: Linux-x64
           path: |
-            .build/packages/*
+            .build/packages/*.tar.gz
+            .build/packages/ui-packaged
             .build/ui
   windows:
     runs-on: windows-2022
@@ -130,10 +132,13 @@ jobs:
       - name: Preserve the single-file Windows portable distribution
         shell: pwsh
         run: ./pack-portable.ps1 -Runtime .build/packages/Athanor -Output .build/packages/Athanor-Alpha-1.1-Windows-x64.exe
+      - name: Launch the single-file distribution without developer tools
+        run: python tests/windows_portable.py .build/packages/Athanor-Alpha-1.1-Windows-x64.exe
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: Windows-x64
           path: |
             .build/packages/*.exe
+            .build/packages/ui-packaged
             .build/ui

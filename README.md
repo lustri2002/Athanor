@@ -129,6 +129,11 @@ window and all compact categories and produces reviewable screenshots.
 Packaging repeats the conversion and native UI checks with developer library
 paths removed, and tests macOS/Linux updates against complete relocated app
 trees, including bundled Qt symlinks and codec libraries.
+Windows also launches the original single-file EXE and performs image/audio
+conversions using its extracted runtime. Linux checks CLI startup without a
+display. Actual GPU AV1 hardware and desktop notification delivery require
+testing on the corresponding user hardware/session; CI checks CPU conversion
+and the existing Auto-to-CPU fallback.
 
 `ATHANOR_TEST=1` prevents tests from installing real user integrations or making
 automatic GitHub requests. Platform tests put file manager actions in temporary

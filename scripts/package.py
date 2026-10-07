@@ -60,6 +60,10 @@ def verify(binary, app):
         env["PATH"] = os.pathsep.join(map(str, [binary.parent, binary.parent.parent / "Resources/tools", "/usr/bin", "/bin"]))
     else:
         env["PATH"] = os.pathsep.join(map(str, [binary.parent, "/usr/bin", "/bin"]))
+        headless = dict(env)
+        for name in ("DISPLAY", "WAYLAND_DISPLAY", "QT_QPA_PLATFORM"):
+            headless.pop(name, None)
+        run(binary, "--cli", env=headless)
     run(binary, "--qml-check", env=env)
     run(binary, "--quick", "--qml-check", env=env)
     run(sys.executable, repo / "tests/smoke.py", binary, env=env)

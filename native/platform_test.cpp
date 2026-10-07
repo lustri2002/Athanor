@@ -72,6 +72,16 @@ int runPlatformTest()
     const auto stderrBytes = automator.readAllStandardError();
     check(done && automator.exitCode() == 0 && QString::fromUtf8(stdoutBytes).normalized(QString::NormalizationForm_C).contains(file.normalized(QString::NormalizationForm_C)),
           "Finder workflow did not pass selected path intact: " + QString::fromUtf8(stdoutBytes + stderrBytes));
+    const auto gifWorkflow = root + "/actions/Athanor - GIF - Convert to WebM.workflow";
+    QFile gifInfo(gifWorkflow + "/Contents/Info.plist");
+    check(gifInfo.open(QIODevice::ReadOnly) && gifInfo.readAll().contains("com.compuserve.gif"),
+          "Finder video targets are not registered for the GIF image UTI");
+    const auto gif = root + "/animation.gif";
+    write(gif, "test");
+    automator.start("/usr/bin/automator", {"-i", gif, gifWorkflow});
+    check(automator.waitForFinished(30000) && automator.exitCode() == 0 &&
+          QString::fromUtf8(automator.readAllStandardOutput()).contains("--target webm -- " + gif),
+          "Finder GIF action did not select the existing video conversion target");
 #endif
     check(DesktopIntegration::configure(false, "/bin/echo", &error), "Action removal failed: " + error);
     QDirIterator remaining(root + "/actions", QDir::Files, QDirIterator::Subdirectories);
